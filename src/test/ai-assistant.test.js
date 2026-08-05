@@ -150,11 +150,22 @@ test('stores configuration without exposing the API key and validates model outp
 	assert.equal(requestBody.stream, true);
 	assert.match(requestBody.messages[0].content, /使用煤矿行业术语/);
 	assert.match(requestBody.messages[0].content, /优先优化布局和连线/);
+	assert.match(requestBody.messages[0].content, /REQUEST_SCOPE: SELECTION_ONLY/);
 	assert.match(requestBody.messages[0].content, /always take precedence/);
 	const cleared = service.saveConfig({baseUrl: 'https://example.com/v1', model: 'demo',
 		customPrompt: '', optimizationFocus: ''});
 	assert.equal(cleared.customPrompt, '');
 	assert.equal(cleared.optimizationFocus, '');
+});
+
+test('rejects unsupported diagram scopes before requesting AI', async () =>
+{
+	const service = createAiAssistantService({store: new MemoryStore()});
+
+	await assert.rejects(service.chat({
+		messages: [{role: 'user', content: '调整图形'}],
+		context: {scope: 'document', cells: []}
+	}), /scope is invalid/);
 });
 
 test('injects only relevant confirmed corrections and reports deterministic quality issues', async t =>
@@ -449,6 +460,9 @@ test('keeps the AI tabs attached to floating Sketch and Minimal format windows',
 	assert.match(pluginSource, /userAttachments\[historyIndex\]/);
 	assert.match(pluginSource, /编辑此问题并重新提问/);
 	assert.match(pluginSource, /记住这次修改/);
+	assert.match(pluginSource, /已选中 .* 个图形（局部）/);
+	assert.match(pluginSource, /AI 只会处理当前选中的图形/);
+	assert.match(pluginSource, /当前页 .* 个图形（全局）/);
 	assert.match(pluginSource, /function rememberCorrection\(change\)/);
 	assert.match(pluginSource, /beforeAi: change\.beforeAi/);
 	assert.match(pluginSource, /corrected: snapshotDiagram\(true\)/);

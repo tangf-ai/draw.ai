@@ -481,13 +481,19 @@ function validateChatInput(input)
 	}
 
 	if (context.cells.length > 300) throw new Error('Diagram context contains more than 300 cells');
+	const scope = context.scope == null ? 'page' : context.scope;
+
+	if (scope !== 'selection' && scope !== 'page')
+	{
+		throw new Error('Diagram context scope is invalid');
+	}
 
 	const messages = Array.isArray(input.messages) ? input.messages : [];
 
 	if (messages.length === 0 || messages.length > 20) throw new Error('Chat history is invalid');
 
 	return {
-		context,
+		context: {...context, scope},
 		messages: messages.map((message, index) => ({
 			role: message != null && message.role === 'assistant' ? 'assistant' : 'user',
 			content: requiredString(message != null ? message.content : null,
@@ -683,9 +689,18 @@ meaning even when the sketch is rough or incomplete. Never embed or trace the so
 an image element on the canvas.
 If the user is asking a question that needs no diagram mutation, return an empty operations array.`;
 
-function buildSystemPrompt(config, memories = [], qualityIssues = [])
+function buildSystemPrompt(config, memories = [], qualityIssues = [], scope = 'page')
 {
 	const sections = [SYSTEM_PROMPT];
+
+	if (scope === 'selection')
+	{
+		sections.push('REQUEST_SCOPE: SELECTION_ONLY. The diagram context contains only the cells selected by the user. Modify, delete, move, style, connect, or lay out only the supplied existing IDs. Never infer, inspect, or change an unlisted existing cell. New cells are allowed only when directly required by the user request, and may connect only to supplied IDs or refs created earlier in this response.');
+	}
+	else
+	{
+		sections.push('REQUEST_SCOPE: FULL_PAGE. The diagram context contains the current page. Apply changes only to IDs supplied in that context or refs created earlier in this response.');
+	}
 
 	if (config.optimizationFocus !== '')
 	{
@@ -780,7 +795,8 @@ function requestMessages(request, config, memories = [], qualityIssues = [])
 	}
 
 	return [
-		{role: 'system', content: buildSystemPrompt(config, memories, qualityIssues)},
+		{role: 'system', content: buildSystemPrompt(config, memories, qualityIssues,
+			request.context.scope)},
 		...messages,
 		{role: 'user', content: 'DIAGRAM_CONTEXT_JSON:\n' + JSON.stringify(request.context)}
 	];
