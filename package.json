@@ -12,7 +12,7 @@
   "scripts": {
     "start": "electron .",
     "sync": "node ./sync.cjs",
-    "test": "node --test src/test/ai-assistant.test.js src/test/branding.test.js src/test/cli-args.test.js src/test/msi-project-created.test.js src/test/user-data-migration.test.js src/test/window-bounds.test.js src/test/workspace-files.test.js",
+    "test": "node --test src/test/ai-assistant.test.js src/test/ai-memory.test.js src/test/branding.test.js src/test/cli-args.test.js src/test/msi-project-created.test.js src/test/user-data-migration.test.js src/test/window-bounds.test.js src/test/workspace-files.test.js",
 	"generate-icons": "node build/generate-icons.mjs",
     "release-win": "electron-builder --config electron-builder-win.json --publish always",
     "release-win32": "electron-builder --config electron-builder-win32.json --publish always",

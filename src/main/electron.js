@@ -48,7 +48,8 @@ catch (e)
 	store = null;
 }
 
-aiAssistantService = createAiAssistantService({store, safeStorage});
+aiAssistantService = createAiAssistantService({store, safeStorage,
+	getWorkspaceRoot: () => store?.get('workspaceRoot')});
 
 // One-shot migration: detect whether this is a fresh install or an update,
 // so we can seed the drawio Configuration's defaultAdaptiveColors accordingly.
@@ -3978,6 +3979,15 @@ ipcMain.on("rendererReq", async (event, args) =>
 			{
 				event.reply('mainResp', {progress: true, data: progress, reqId: args.reqId});
 			});
+			break;
+		case 'aiListMemories':
+			ret = await aiAssistantService.listMemories();
+			break;
+		case 'aiSaveCorrection':
+			ret = await aiAssistantService.saveCorrection(args.input);
+			break;
+		case 'aiDeleteMemory':
+			ret = await aiAssistantService.deleteMemory(args.id);
 			break;
 		case 'dirname':
 			reqStr(args.path, 'path');

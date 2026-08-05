@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import {readFile} from 'node:fs/promises';
+import {mkdtemp, readFile, rm} from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import {
 	buildChatCompletionUrl,
@@ -153,6 +155,63 @@ test('stores configuration without exposing the API key and validates model outp
 		customPrompt: '', optimizationFocus: ''});
 	assert.equal(cleared.customPrompt, '');
 	assert.equal(cleared.optimizationFocus, '');
+});
+
+test('injects only relevant confirmed corrections and reports deterministic quality issues', async t =>
+{
+	const root = await mkdtemp(path.join(os.tmpdir(), 'draw-ai-service-memory-'));
+	t.after(() => rm(root, {recursive: true, force: true}));
+	const store = new MemoryStore();
+	store.set('workspaceRoot', root);
+	let sentRequest;
+	const service = createAiAssistantService({
+		store,
+		fetchImpl: async (requestUrl, request) =>
+		{
+			sentRequest = {requestUrl, request};
+			return {ok: true, async json() { return {choices: [{message: {content:
+				'{"reply":"已优化","operations":[]}'}}]}; }};
+		}
+	});
+	service.saveConfig({baseUrl: 'https://example.com/v1', model: 'demo'});
+	const afterAi = {scope: 'page', pageName: '煤矿架构', cells: [
+		{id: '1', type: 'vertex', label: '接口', geometry: {x: 0, y: 0, width: 120, height: 60}, style: {}}
+	]};
+	const corrected = {scope: 'page', pageName: '煤矿架构', cells: [
+		{id: '1', type: 'vertex', label: '数据接口', geometry: {x: 20, y: 20, width: 120, height: 60}, style: {}}
+	]};
+	await service.saveCorrection({prompt: '绘制煤矿数据接口', afterAi, corrected});
+
+	const context = {scope: 'page', pageName: '煤矿架构', cells: [
+		{id: '1', type: 'vertex', label: '数据接口', geometry: {x: -5, y: 0, width: 120, height: 60}, style: {}}
+	]};
+	const plan = await service.chat({messages: [{role: 'user', content: '优化煤矿接口'}], context});
+	const body = JSON.parse(sentRequest.request.body);
+
+	assert.equal(plan.usedMemories.length, 1);
+	assert.ok(plan.qualityIssues.some(issue => issue.type === 'outOfBounds'));
+	assert.match(body.messages[0].content, /CONFIRMED_USER_CORRECTION_MEMORY_JSON/);
+	assert.match(body.messages[0].content, /DETERMINISTIC_DIAGRAM_QUALITY_ISSUES_JSON/);
+	assert.equal((await service.listMemories()).length, 1);
+	assert.equal(await service.deleteMemory(plan.usedMemories[0].id), true);
+});
+
+test('unavailable workspace memory never blocks AI chat', async () =>
+{
+	const store = new MemoryStore();
+	const service = createAiAssistantService({
+		store,
+		getWorkspaceRoot: () => '/path/that/does/not/exist',
+		fetchImpl: async () => ({ok: true, async json() { return {choices: [{message: {content:
+			'{"reply":"正常回答","operations":[]}'}}]}; }})
+	});
+	service.saveConfig({baseUrl: 'https://example.com/v1', model: 'demo'});
+	const plan = await service.chat({messages: [{role: 'user', content: '分析图'}],
+		context: {scope: 'page', cells: [{id: '1', type: 'vertex', label: '越界节点',
+			geometry: {x: -10, y: 0, width: 120, height: 60}, style: {}}]}});
+	assert.equal(plan.reply, '正常回答');
+	assert.deepEqual(plan.usedMemories, []);
+	assert.ok(plan.qualityIssues.some(issue => issue.type === 'outOfBounds'));
 });
 
 test('tests the configured endpoint and returns selectable models without saving secrets', async () =>
@@ -389,6 +448,15 @@ test('keeps the AI tabs attached to floating Sketch and Minimal format windows',
 	assert.match(pluginSource, /chatHistory\.splice\(historyIndex\)/);
 	assert.match(pluginSource, /userAttachments\[historyIndex\]/);
 	assert.match(pluginSource, /编辑此问题并重新提问/);
+	assert.match(pluginSource, /记住这次修改/);
+	assert.match(pluginSource, /function rememberCorrection\(change\)/);
+	assert.match(pluginSource, /beforeAi: change\.beforeAi/);
+	assert.match(pluginSource, /corrected: snapshotDiagram\(true\)/);
+	assert.match(pluginSource, /lastAiChange\.wasRolledBack = true/);
+	assert.match(pluginSource, /request\('aiListMemories'/);
+	assert.match(pluginSource, /request\('aiDeleteMemory'/);
+	assert.match(pluginSource, /已参考 .* 条纠错记忆/);
+	assert.match(pluginSource, /质量检查发现/);
 	assert.match(pluginSource, /cancelEditButton\.addEventListener\('click', cancelQuestionEdit\)/);
 	assert.match(pluginSource, /promptInput\.addEventListener\('paste'/);
 	assert.match(pluginSource, /composer\.addEventListener\('drop'/);

@@ -27,6 +27,7 @@ draw.ai brings a unified file workspace, reusable templates, image-aware AI assi
 - **Reusable diagram template**: configure the content used for every new diagram.
 - **Synchronized template source**: track a template in iCloud Drive or another synchronized folder, detect newer external versions, and explicitly update the local hidden working copy.
 - **AI diagram assistant**: discuss the current diagram, generate editable shapes, apply proposed changes, and roll back the most recent AI application.
+- **Confirmed correction memory**: manually refine an applied AI result, then explicitly save the correction. Relevant memories can guide later requests and can be reviewed or deleted in AI settings.
 - **Image-to-diagram**: upload, paste, or drag a PNG, JPEG, or WebP image. The assistant can reconstruct a screenshot or hand-drawn sketch as editable boxes, connectors, text, and hierarchy.
 - **Configurable AI provider**: use an OpenAI-compatible endpoint and configure the API key, model, system prompt, and optimization instructions inside the app.
 - **Cross-platform packaging**: macOS, Windows, and Linux build configurations are included.
@@ -61,8 +62,11 @@ git submodule update --init --recursive
 3. Enter a request, or paste, upload, or drag in a reference image.
 4. Review the proposed diagram update before applying it.
 5. Use **Roll back** to undo the latest applied AI change.
+6. After manually correcting an applied result, select **Remember this change**. Ordinary edits are never learned without this explicit action.
 
 Images are resized locally when needed and sent only with the request that includes them. The default limit is 10 MB, with the longest edge reduced to 2048 pixels before submission.
+
+Confirmed corrections are stored in `.drawio-workspace/assistant-memory.json` inside the unified workspace, so they can synchronize when the workspace is in iCloud Drive. The app stores only bounded, structured diagram differences, never API keys or original uploaded images. Each request retrieves at most five relevant memories. Memories can be reviewed and deleted in AI settings.
 
 ## Templates and iCloud
 
@@ -70,7 +74,7 @@ The editable working template is stored as a hidden file managed by draw.ai. Imp
 
 ## Privacy
 
-Workspace and diagram editing are local by default. AI requests are made only after the user configures a provider and submits a message. A request may contain the prompt, configured instructions, relevant diagram structure, and an attached image. Review the privacy and retention terms of the selected AI provider.
+Workspace and diagram editing are local by default. AI requests are made only after the user configures a provider and submits a message. A request may contain the prompt, configured instructions, relevant diagram structure, retrieved confirmed corrections, and an attached image. Review the privacy and retention terms of the selected AI provider.
 
 The application checks this GitHub repository for updates unless checks are disabled with `DRAWIO_DISABLE_UPDATE=true` or `--disable-update`. Diagrams can also load external media referenced by URL.
 

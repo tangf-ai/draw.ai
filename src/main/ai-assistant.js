@@ -1,3 +1,12 @@
+import {
+	assessDiagramQuality,
+	deleteAiMemory,
+	formatMemoriesForPrompt,
+	listAiMemories,
+	retrieveRelevantMemories,
+	saveAiCorrection
+} from './ai-memory.js';
+
 const CONFIG_KEY = 'aiAssistant.config';
 const SECRET_KEY = 'aiAssistant.apiKey';
 const SECRET_RECOVERY_KEY = 'aiAssistant.apiKeyRecoveryRequired';
@@ -674,7 +683,7 @@ meaning even when the sketch is rough or incomplete. Never embed or trace the so
 an image element on the canvas.
 If the user is asking a question that needs no diagram mutation, return an empty operations array.`;
 
-function buildSystemPrompt(config)
+function buildSystemPrompt(config, memories = [], qualityIssues = [])
 {
 	const sections = [SYSTEM_PROMPT];
 
@@ -686,6 +695,20 @@ function buildSystemPrompt(config)
 	if (config.customPrompt !== '')
 	{
 		sections.push(`USER_CUSTOM_INSTRUCTIONS:\n${config.customPrompt}`);
+	}
+
+	const memoryPrompt = formatMemoriesForPrompt(memories);
+
+	if (memoryPrompt !== '')
+	{
+		sections.push(memoryPrompt);
+	}
+
+	if (qualityIssues.length > 0)
+	{
+		sections.push('DETERMINISTIC_DIAGRAM_QUALITY_ISSUES_JSON:\n' +
+			JSON.stringify(qualityIssues) +
+			'\nAddress these issues only when relevant to the user request. Do not delete or broadly rearrange the diagram without an explicit request.');
 	}
 
 	sections.push('The built-in output schema, allowed operations, reference rules, and safety rules always take precedence.');
@@ -732,7 +755,7 @@ function imageResponseError(body, status)
 	return error;
 }
 
-function requestMessages(request, config)
+function requestMessages(request, config, memories = [], qualityIssues = [])
 {
 	const messages = request.messages.map(message => ({...message}));
 
@@ -757,7 +780,7 @@ function requestMessages(request, config)
 	}
 
 	return [
-		{role: 'system', content: buildSystemPrompt(config)},
+		{role: 'system', content: buildSystemPrompt(config, memories, qualityIssues)},
 		...messages,
 		{role: 'user', content: 'DIAGRAM_CONTEXT_JSON:\n' + JSON.stringify(request.context)}
 	];
@@ -872,8 +895,14 @@ function requestHeaders(apiKey, accept)
 	return headers;
 }
 
-export function createAiAssistantService({store, safeStorage, fetchImpl = globalThis.fetch})
+export function createAiAssistantService({store, safeStorage, fetchImpl = globalThis.fetch,
+	getWorkspaceRoot = () => store?.get('workspaceRoot')})
 {
+	function workspaceRoot()
+	{
+		return typeof getWorkspaceRoot === 'function' ? getWorkspaceRoot() : null;
+	}
+
 	return {
 		getConfig()
 		{
@@ -916,9 +945,35 @@ export function createAiAssistantService({store, safeStorage, fetchImpl = global
 			if (isSecretRecoveryRequired(store)) throw apiKeyRecoveryError();
 			const apiKey = readSecret(store, safeStorage);
 			const headers = requestHeaders(apiKey, 'text/event-stream, application/json');
+			const latestUserMessage = [...request.messages].reverse().find(message => message.role === 'user');
+			let memories = [];
+			let qualityIssues = [];
+
+			try
+			{
+				qualityIssues = assessDiagramQuality(request.context);
+			}
+			catch (error)
+			{
+				qualityIssues = [];
+			}
+
+			try
+			{
+				memories = await retrieveRelevantMemories(workspaceRoot(), {
+					prompt: latestUserMessage?.content || '', context: request.context
+				});
+			}
+			catch (error)
+			{
+				// Missing, unreadable, or malformed workspace memory must never block chat.
+				memories = [];
+			}
 			notifyProgress(onProgress, 'connecting', {
 				host: new URL(config.baseUrl).host,
-				model: config.model
+				model: config.model,
+				memoryCount: memories.length,
+				qualityIssueCount: qualityIssues.length
 			});
 
 			const response = await fetchImpl(buildChatCompletionUrl(config.baseUrl), {
@@ -930,7 +985,7 @@ export function createAiAssistantService({store, safeStorage, fetchImpl = global
 					model: config.model,
 					temperature: 0.1,
 					stream: true,
-					messages: requestMessages(request, config)
+					messages: requestMessages(request, config, memories, qualityIssues)
 				})
 			});
 
@@ -961,11 +1016,29 @@ export function createAiAssistantService({store, safeStorage, fetchImpl = global
 
 			notifyProgress(onProgress, 'validating');
 			const plan = validateAiPlan(parseAiResponseText(content), request.context);
+			plan.usedMemories = memories.map(memory => ({id: memory.id, prompt: memory.prompt,
+				categories: memory.categories}));
+			plan.qualityIssues = qualityIssues;
 			notifyProgress(onProgress, 'ready', {operationCount: plan.operations.length,
 				repairCount: plan.repairCount,
 				temporaryReferenceRepairCount: plan.temporaryReferenceRepairCount,
 				styleRepairCount: plan.styleRepairCount});
 			return plan;
+		},
+
+		async listMemories()
+		{
+			return listAiMemories(workspaceRoot());
+		},
+
+		async saveCorrection(input)
+		{
+			return saveAiCorrection(workspaceRoot(), input);
+		},
+
+		async deleteMemory(id)
+		{
+			return deleteAiMemory(workspaceRoot(), id);
 		},
 
 		async testConfig(input)
