@@ -124,7 +124,7 @@ export function buildModelsUrl(baseUrl)
 
 function normalizeStyle(style)
 {
-	if (style == null) return {};
+	if (style == null) return {style: {}, repairCount: 0};
 
 	if (typeof style !== 'object' || Array.isArray(style))
 	{
@@ -132,6 +132,7 @@ function normalizeStyle(style)
 	}
 
 	const result = {};
+	let repairCount = 0;
 
 	for (const [key, rawValue] of Object.entries(style))
 	{
@@ -140,60 +141,84 @@ function normalizeStyle(style)
 			throw new Error(`style key is not allowed: ${key}`);
 		}
 
-		const value = String(rawValue);
+		if (!['string', 'number', 'boolean'].includes(typeof rawValue))
+		{
+			repairCount++;
+			continue;
+		}
+
+		const value = String(rawValue).trim();
 
 		if (value.length > 80 || /[;=<>]/.test(value))
 		{
-			throw new Error(`style value is invalid: ${key}`);
+			repairCount++;
+			continue;
 		}
 
 		if (/Color$/.test(key) && !/^(#[0-9a-fA-F]{3,8}|none|transparent|default)$/.test(value))
 		{
-			throw new Error(`color is invalid: ${key}`);
+			repairCount++;
+			continue;
 		}
 
 		if (['rounded', 'dashed', 'shadow'].includes(key) && !/^[01]$/.test(value))
 		{
-			throw new Error(`boolean style is invalid: ${key}`);
+			repairCount++;
+			continue;
 		}
 
 		if (key === 'fontStyle' && !/^[0-7]$/.test(value))
 		{
-			throw new Error('fontStyle is invalid');
+			repairCount++;
+			continue;
 		}
 
 		if (key === 'shape' && !/^(ellipse|rhombus|note|cloud|cylinder)$/.test(value))
 		{
-			throw new Error('shape is invalid');
+			repairCount++;
+			continue;
 		}
 
 		if (key === 'align' && !/^(left|center|right)$/.test(value))
 		{
-			throw new Error('align is invalid');
+			repairCount++;
+			continue;
 		}
 
 		if (key === 'verticalAlign' && !/^(top|middle|bottom)$/.test(value))
 		{
-			throw new Error('verticalAlign is invalid');
+			repairCount++;
+			continue;
 		}
 
 		if (key === 'endArrow' && !/^(none|classic|block|open|oval|diamond)$/.test(value))
 		{
-			throw new Error('endArrow is invalid');
+			repairCount++;
+			continue;
 		}
 
 		if (key === 'edgeStyle' && !/^(none|orthogonalEdgeStyle|elbowEdgeStyle|entityRelationEdgeStyle)$/.test(value))
 		{
-			throw new Error('edgeStyle is invalid');
+			repairCount++;
+			continue;
 		}
 
-		if (key === 'opacity') boundedNumber(Number(value), key, 0, 100);
-		if (key === 'strokeWidth') boundedNumber(Number(value), key, 0, 20);
+		if (key === 'opacity' && (!/^\d+(?:\.\d+)?$/.test(value) || Number(value) > 100))
+		{
+			repairCount++;
+			continue;
+		}
+
+		if (key === 'strokeWidth' && (!/^\d+(?:\.\d+)?$/.test(value) || Number(value) > 20))
+		{
+			repairCount++;
+			continue;
+		}
 
 		result[key] = value;
 	}
 
-	return result;
+	return {style: result, repairCount};
 }
 
 function operationId(value, name, availableIds)
@@ -294,6 +319,14 @@ export function validateAiPlan(plan, context)
 	}
 
 	const normalized = [];
+	let styleRepairCount = 0;
+
+	function normalizedStyle(style)
+	{
+		const result = normalizeStyle(style);
+		styleRepairCount += result.repairCount;
+		return result.style;
+	}
 
 	for (let i = 0; i < operations.length; i++)
 	{
@@ -331,7 +364,7 @@ export function validateAiPlan(plan, context)
 				width: boundedNumber(operation.width, 'addNode.width', 20, 2000),
 				height: boundedNumber(operation.height, 'addNode.height', 20, 2000),
 				shape,
-				style: normalizeStyle(operation.style)
+				style: normalizedStyle(operation.style)
 			};
 			availableIds.add(ref);
 			break;
@@ -352,12 +385,15 @@ export function validateAiPlan(plan, context)
 				sourceId: operationId(operation.sourceId, 'connect.sourceId', availableIds),
 				targetId: operationId(operation.targetId, 'connect.targetId', availableIds),
 				label: optionalString(operation.label, 'connect.label', 500),
-				style: normalizeStyle(operation.style)};
+				style: normalizedStyle(operation.style)};
 			break;
 		case 'setStyle':
 			next = {type, id: operationId(operation.id, 'setStyle.id', availableIds),
-				style: normalizeStyle(operation.style)};
-			if (Object.keys(next.style).length === 0) throw new Error('setStyle.style is empty');
+				style: normalizedStyle(operation.style)};
+			if (Object.keys(next.style).length === 0)
+			{
+				continue;
+			}
 			break;
 		case 'deleteCells':
 			if (!Array.isArray(operation.ids) || operation.ids.length === 0 || operation.ids.length > 50)
@@ -391,7 +427,9 @@ export function validateAiPlan(plan, context)
 		reply: optionalString(plan.reply, 'reply', 2000) ||
 			(normalized.length > 0 ? '已生成绘图修改方案。' : '没有需要应用的绘图修改。'),
 		operations: normalized,
-		repairCount: repaired.repairCount
+		repairCount: repaired.repairCount + styleRepairCount,
+		temporaryReferenceRepairCount: repaired.repairCount,
+		styleRepairCount
 	};
 }
 
@@ -615,6 +653,8 @@ Allowed operations:
 
 Style keys are limited to fillColor, strokeColor, fontColor, rounded, dashed, shadow,
 fontStyle, shape, align, verticalAlign, endArrow, edgeStyle, opacity, and strokeWidth.
+For any *Color style, use only a literal #RGB, #RRGGBB, #RRGGBBAA, none, transparent, or default.
+Do not use a style key or theme token such as fontColor as a color value.
 Use only IDs supplied in the diagram context or refs introduced by an earlier addNode.
 Every addNode.ref must start with new_, contain only ASCII letters, digits, underscores, or
 hyphens, be unique across the response, and never reuse an ID from the diagram context.
@@ -914,7 +954,9 @@ export function createAiAssistantService({store, safeStorage, fetchImpl = global
 			notifyProgress(onProgress, 'validating');
 			const plan = validateAiPlan(parseAiResponseText(content), request.context);
 			notifyProgress(onProgress, 'ready', {operationCount: plan.operations.length,
-				repairCount: plan.repairCount});
+				repairCount: plan.repairCount,
+				temporaryReferenceRepairCount: plan.temporaryReferenceRepairCount,
+				styleRepairCount: plan.styleRepairCount});
 			return plan;
 		},
 

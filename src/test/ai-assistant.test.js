@@ -75,6 +75,21 @@ test('validates supported operations and temporary references', () =>
 	]}, {cells: [{id: '1'}]}), /not allowed/);
 });
 
+test('keeps drawing plans when the model echoes an invalid theme color token', () =>
+{
+	const result = validateAiPlan({operations: [
+		{type: 'addNode', ref: 'new_hermes_agent', label: 'Hermes Agent', x: 300, y: 100,
+			width: 140, height: 60, shape: 'rounded',
+			style: {fillColor: '#ffffff', fontColor: 'fontColor', rounded: '1'}},
+		{type: 'setStyle', id: '1', style: {fontColor: 'fontColor'}}
+	]}, {cells: [{id: '1'}]});
+
+	assert.equal(result.operations.length, 1);
+	assert.deepEqual(result.operations[0].style, {fillColor: '#ffffff', rounded: '1'});
+	assert.equal(result.styleRepairCount, 2);
+	assert.equal(result.repairCount, 2);
+});
+
 test('repairs invalid and repeated temporary references while preserving operation order', () =>
 {
 	const result = validateAiPlan({operations: [
@@ -361,6 +376,8 @@ test('keeps the AI tabs attached to floating Sketch and Minimal format windows',
 	assert.match(pluginSource, /addListener\(mxEvent\.ADD, updateRollbackState\)/);
 	assert.match(pluginSource, /image\/png,image\/jpeg,image\/webp/);
 	assert.match(pluginSource, /function attachImageFile\(file\)/);
+	assert.match(pluginSource, /function isSupportedAiStyleValue\(key, value\)/);
+	assert.match(pluginSource, /已修复 .* 处 AI 输出/);
 	assert.match(pluginSource, /promptInput\.addEventListener\('paste'/);
 	assert.match(pluginSource, /composer\.addEventListener\('drop'/);
 	assert.match(pluginSource, /最长边|2048/);
