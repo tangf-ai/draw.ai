@@ -102,6 +102,9 @@ Draw.loadPlugin(function installAiAssistant(ui)
 	var currentMode = 'format';
 	var pendingPlan = null;
 	var chatHistory = [];
+	var userAttachments = [];
+	var editingHistoryIndex = null;
+	var editDraft = null;
 	var config = null;
 	var requestPending = false;
 	var activeProgress = null;
@@ -208,9 +211,12 @@ Draw.loadPlugin(function installAiAssistant(ui)
 		'.geAiIconBtn:disabled{opacity:.35;cursor:default}',
 		'.geAiMessages{flex:1;overflow-y:auto;padding:12px 12px 6px;box-sizing:border-box}',
 		'.geAiMessage{margin:0 0 12px;line-height:1.55;word-break:break-word;letter-spacing:0}',
-		'.geAiMessageUser{margin-left:28px;padding:8px 10px;border-radius:6px;background:light-dark(#eef4ff,#2b3b55)}',
+		'.geAiMessageUser{position:relative;margin-left:28px;padding:8px 36px 8px 10px;border-radius:6px;background:light-dark(#eef4ff,#2b3b55)}',
 		'.geAiMessageAssistant{padding-left:10px;border-left:3px solid light-dark(#1a73e8,#8ab4f8)}',
 		'.geAiMessageError{color:light-dark(#b3261e,#f28b82);border-left-color:light-dark(#b3261e,#f28b82)}',
+		'.geAiQuestionEdit{position:absolute;top:4px;right:4px;width:24px;height:24px;border:0;border-radius:4px;background:transparent;color:inherit;font:16px/1 Arial,sans-serif;cursor:pointer;padding:0}',
+		'.geAiQuestionEdit:hover{background:light-dark(#dbe8ff,#40516c)}',
+		'.geAiQuestionEdit:disabled{opacity:.4;cursor:default}',
 		'.geAiMessageActions{display:flex;align-items:center;gap:8px;margin-top:8px}',
 		'.geAiButton.geAiRollbackButton{min-height:28px;padding:4px 9px}',
 		'.geAiProgress{margin:0 0 12px;padding:10px;border:1px solid light-dark(#d8dce2,#4a4d52);border-radius:6px;background:light-dark(#fafbfc,#292a2e)}',
@@ -238,6 +244,10 @@ Draw.loadPlugin(function installAiAssistant(ui)
 		'.geAiButton:disabled{opacity:.45;cursor:default}',
 		'.geAiComposer{display:flex;flex-direction:column;gap:8px;padding:10px;border-top:1px solid light-dark(#e1e4e8,#3c4043);box-sizing:border-box;transition:background-color .14s,border-color .14s}',
 		'.geAiComposer.geAiDropActive{background:light-dark(#eef4ff,#26354d);border-top-color:#1a73e8}',
+		'.geAiEditMode{display:none;align-items:center;justify-content:space-between;gap:8px;min-height:24px;padding:0 2px;color:light-dark(#185abc,#8ab4f8);font-size:12px}',
+		'.geAiEditMode.geAiVisible{display:flex}',
+		'.geAiEditCancel{width:24px;height:24px;border:0;border-radius:4px;background:transparent;color:inherit;font:17px/1 Arial,sans-serif;cursor:pointer;padding:0}',
+		'.geAiEditCancel:hover{background:light-dark(#e8eaed,#3c4043)}',
 		'.geAiComposerRow{display:flex;align-items:flex-end;gap:8px;min-width:0}',
 		'.geAiAttach{width:34px;height:34px;min-width:34px;border:1px solid light-dark(#c8ccd2,#5f6368);border-radius:4px;background:transparent;color:inherit;font:20px/1 Arial,sans-serif;cursor:pointer;padding:0}',
 		'.geAiAttach:hover{background:light-dark(#eef1f4,#35363a)}',
@@ -311,6 +321,12 @@ Draw.loadPlugin(function installAiAssistant(ui)
 	conversation.appendChild(planPanel);
 
 	var composer = createElement('div', 'geAiComposer');
+	var editMode = createElement('div', 'geAiEditMode');
+	var editModeLabel = createElement('span', null, '正在修改原问题');
+	var cancelEditButton = createButton('geAiEditCancel', '×', '取消修改');
+	cancelEditButton.setAttribute('aria-label', '取消修改原问题');
+	editMode.appendChild(editModeLabel);
+	editMode.appendChild(cancelEditButton);
 	var attachmentPreview = createElement('div', 'geAiAttachment geAiHidden');
 	var attachmentImage = createElement('img');
 	attachmentImage.setAttribute('alt', '');
@@ -335,6 +351,7 @@ Draw.loadPlugin(function installAiAssistant(ui)
 	composerRow.appendChild(attachButton);
 	composerRow.appendChild(promptInput);
 	composerRow.appendChild(sendButton);
+	composer.appendChild(editMode);
 	composer.appendChild(attachmentPreview);
 	composer.appendChild(composerRow);
 	composer.appendChild(imageInput);
@@ -590,12 +607,101 @@ Draw.loadPlugin(function installAiAssistant(ui)
 			'当前页 ' + snapshotDiagram().cells.length + ' 个图形';
 	}
 
-	function addMessage(role, text, error)
+	function updateComposerEditState()
+	{
+		var editing = editingHistoryIndex != null;
+		editMode.classList.toggle('geAiVisible', editing);
+		promptInput.setAttribute('placeholder', editing ?
+			'修改原问题后重新提问' : '输入要求，或粘贴手绘草稿');
+		sendButton.setAttribute('title', editing ? '更新问题并重新提问' : '发送');
+	}
+
+	function restoreAttachment(image)
+	{
+		imageLoadToken++;
+		imageProcessing = false;
+		attachedImage = image || null;
+		imageInput.value = '';
+		attachButton.disabled = requestPending;
+		imageInput.disabled = requestPending;
+		attachButton.setAttribute('title', '上传图片');
+		updateAttachmentPreview();
+	}
+
+	function discardConversationFrom(historyIndex)
+	{
+		chatHistory.splice(historyIndex);
+		userAttachments.length = historyIndex;
+		var oldMessages = messages.querySelectorAll('[data-ai-history-index]');
+
+		for (var i = 0; i < oldMessages.length; i++)
+		{
+			var messageIndex = Number(oldMessages[i].getAttribute('data-ai-history-index'));
+
+			if (!isNaN(messageIndex) && messageIndex >= historyIndex &&
+				oldMessages[i].parentNode != null)
+			{
+				oldMessages[i].parentNode.removeChild(oldMessages[i]);
+			}
+		}
+
+		pendingPlan = null;
+		planPanel.classList.add('geAiHidden');
+
+		if (messages.children.length === 0) messages.appendChild(emptyState);
+		messages.scrollTop = messages.scrollHeight;
+	}
+
+	function cancelQuestionEdit()
+	{
+		if (editingHistoryIndex == null) return;
+		var draft = editDraft || {prompt: '', image: null};
+		editingHistoryIndex = null;
+		editDraft = null;
+		promptInput.value = draft.prompt;
+		restoreAttachment(draft.image);
+		updateComposerEditState();
+		promptInput.focus();
+	}
+
+	function startQuestionEdit(historyIndex)
+	{
+		if (requestPending || imageProcessing || chatHistory[historyIndex] == null ||
+			chatHistory[historyIndex].role !== 'user')
+		{
+			return;
+		}
+
+		if (editingHistoryIndex != null) cancelQuestionEdit();
+		editDraft = {prompt: promptInput.value, image: attachedImage};
+		editingHistoryIndex = historyIndex;
+		promptInput.value = chatHistory[historyIndex].content;
+		restoreAttachment(userAttachments[historyIndex]);
+		updateComposerEditState();
+		promptInput.focus();
+	}
+
+	function addQuestionEditButton(message, historyIndex)
+	{
+		var editButton = createButton('geAiQuestionEdit', '✎', '编辑此问题并重新提问');
+		editButton.setAttribute('aria-label', '编辑此问题并重新提问');
+		editButton.addEventListener('click', function() { startQuestionEdit(historyIndex); });
+		message.appendChild(editButton);
+	}
+
+	function addMessage(role, text, error, historyIndex)
 	{
 		if (emptyState.parentNode != null) emptyState.parentNode.removeChild(emptyState);
 		var message = createElement('div', 'geAiMessage ' +
 			(role === 'user' ? 'geAiMessageUser' : 'geAiMessageAssistant') +
 			(error ? ' geAiMessageError' : ''), text);
+
+		if (typeof historyIndex === 'number')
+		{
+			message.setAttribute('data-ai-history-index', String(historyIndex));
+			if (role === 'user' && !error) addQuestionEditButton(message, historyIndex);
+		}
+
 		messages.appendChild(message);
 		messages.scrollTop = messages.scrollHeight;
 		return message;
@@ -686,10 +792,16 @@ Draw.loadPlugin(function installAiAssistant(ui)
 		}[stage] || '处理中';
 	}
 
-	function beginProgress(context)
+	function beginProgress(context, historyIndex)
 	{
 		if (emptyState.parentNode != null) emptyState.parentNode.removeChild(emptyState);
 		var card = createElement('div', 'geAiProgress');
+
+		if (typeof historyIndex === 'number')
+		{
+			card.setAttribute('data-ai-history-index', String(historyIndex));
+		}
+
 		var title = createElement('div', 'geAiProgressTitle', 'AI 正在工作');
 		var steps = createElement('div');
 		card.appendChild(title);
@@ -1000,6 +1112,10 @@ Draw.loadPlugin(function installAiAssistant(ui)
 		settingsButton.disabled = pending;
 		cancelPlanButton.disabled = pending;
 		applyPlanButton.disabled = pending || pendingPlan == null || pendingPlan.operations.length === 0;
+		cancelEditButton.disabled = pending;
+		var editButtons = messages.querySelectorAll('.geAiQuestionEdit');
+
+		for (var i = 0; i < editButtons.length; i++) editButtons[i].disabled = pending;
 
 		if (pending)
 		{
@@ -1151,12 +1267,25 @@ Draw.loadPlugin(function installAiAssistant(ui)
 
 		var context = snapshotDiagram();
 		var imageForRequest = attachedImage;
+		var editedHistoryIndex = editingHistoryIndex;
+
+		if (editedHistoryIndex != null)
+		{
+			discardConversationFrom(editedHistoryIndex);
+			editingHistoryIndex = null;
+			editDraft = null;
+			updateComposerEditState();
+		}
+
+		var userHistoryIndex = chatHistory.length;
 		promptInput.value = '';
-		addMessage('user', imageForRequest != null ? prompt + '\n已附图片：' + imageForRequest.name : prompt);
 		chatHistory.push({role: 'user', content: prompt});
+		userAttachments[userHistoryIndex] = imageForRequest || null;
+		addMessage('user', imageForRequest != null ? prompt + '\n已附图片：' + imageForRequest.name : prompt,
+			false, userHistoryIndex);
 		pendingPlan = null;
 		planPanel.classList.add('geAiHidden');
-		beginProgress(context);
+		beginProgress(context, userHistoryIndex);
 		setRequestPending(true);
 
 		request('aiChat', {input: {
@@ -1167,13 +1296,14 @@ Draw.loadPlugin(function installAiAssistant(ui)
 		{
 			finishProgress(true);
 			if (attachedImage === imageForRequest) clearAttachment();
+			var assistantHistoryIndex = chatHistory.length;
 			chatHistory.push({role: 'assistant', content: plan.reply});
-			addMessage('assistant', plan.reply);
+			addMessage('assistant', plan.reply, false, assistantHistoryIndex);
 			showPlan(plan);
 		}).catch(function(error)
 		{
 			finishProgress(false);
-			addMessage('assistant', error.message, true);
+			addMessage('assistant', error.message, true, userHistoryIndex);
 
 			if (error.code === 'AI_API_KEY_RECOVERY_REQUIRED')
 			{
@@ -1373,6 +1503,7 @@ Draw.loadPlugin(function installAiAssistant(ui)
 	testConnectionButton.addEventListener('click', testConnection);
 	saveSettingsButton.addEventListener('click', saveSettings);
 	sendButton.addEventListener('click', sendPrompt);
+	cancelEditButton.addEventListener('click', cancelQuestionEdit);
 	attachButton.addEventListener('click', function()
 	{
 		imageInput.value = '';
