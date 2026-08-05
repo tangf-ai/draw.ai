@@ -630,8 +630,17 @@ Draw.loadPlugin(function installAiAssistant(ui)
 	function updateContextLabel()
 	{
 		var count = graph.getSelectionCount();
-		contextLabel.textContent = count > 0 ? '已选中 ' + count + ' 个图形' :
-			'当前页 ' + snapshotDiagram().cells.length + ' 个图形';
+
+		if (count > 0)
+		{
+			contextLabel.textContent = '已选中 ' + count + ' 个图形（局部）';
+			contextLabel.title = 'AI 只会处理当前选中的图形';
+		}
+		else
+		{
+			contextLabel.textContent = '当前页 ' + snapshotDiagram().cells.length + ' 个图形（全局）';
+			contextLabel.title = 'AI 会处理当前图页';
+		}
 	}
 
 	function updateComposerEditState()
