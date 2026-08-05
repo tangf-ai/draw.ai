@@ -177,9 +177,16 @@ Draw.loadPlugin(function installAiAssistant(ui)
 		{
 			var message = payload || {};
 			message.action = action;
-			window.electron.request(message, resolve, function(error)
+			window.electron.request(message, resolve, function(error, details)
 			{
-				reject(new Error(error || '请求失败'));
+				var requestError = new Error(error || '请求失败');
+
+				if (details != null && typeof details.code === 'string')
+				{
+					requestError.code = details.code;
+				}
+
+				reject(requestError);
 			}, onProgress);
 		});
 	}
@@ -1054,10 +1061,14 @@ Draw.loadPlugin(function installAiAssistant(ui)
 			apiKeyInput.value = '';
 			customPromptInput.value = config != null ? config.customPrompt || '' : '';
 			optimizationFocusInput.value = config != null ? config.optimizationFocus || '' : '';
-			apiKeyInput.setAttribute('placeholder', config != null && config.hasApiKey ?
-				'已安全保存，留空表示不修改' : '可选，本地模型可留空');
-			setConfigStatus(config != null && config.model ?
-				'已配置：' + config.model : '未配置模型');
+			var apiKeyRecoveryRequired = config != null && config.apiKeyRecoveryRequired === true;
+			apiKeyInput.setAttribute('placeholder', apiKeyRecoveryRequired ?
+				'旧密钥无法读取，请重新填写并保存' :
+				(config != null && config.hasApiKey ? '已安全保存，留空表示不修改' : '可选，本地模型可留空'));
+			setConfigStatus(apiKeyRecoveryRequired ?
+				'已保存的 API Key 无法读取，请重新填写并保存。' :
+				(config != null && config.model ? '已配置：' + config.model : '未配置模型'),
+				apiKeyRecoveryRequired ? 'error' : undefined);
 			window.setTimeout(function() { modelInput.focus(); }, 0);
 		}
 		else
@@ -1143,6 +1154,15 @@ Draw.loadPlugin(function installAiAssistant(ui)
 		{
 			finishProgress(false);
 			addMessage('assistant', error.message, true);
+
+			if (error.code === 'AI_API_KEY_RECOVERY_REQUIRED')
+			{
+				loadConfig().then(function()
+				{
+					showSettings(true);
+					setConfigStatus(error.message, 'error');
+				});
+			}
 		}).finally(function()
 		{
 			setRequestPending(false);
