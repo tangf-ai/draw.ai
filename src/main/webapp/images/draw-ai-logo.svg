@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+	<title>draw.ai</title>
+	<rect x="64" y="64" width="896" height="896" rx="224" fill="#15262d"/>
+	<rect x="164" y="164" width="696" height="696" rx="176" fill="#f7fafc"/>
+	<circle cx="476" cy="570" r="146" fill="none" stroke="#157f73" stroke-width="82"/>
+	<path d="M622 296V716" fill="none" stroke="#157f73" stroke-width="82" stroke-linecap="round"/>
+	<path d="M354 264l20 57 57 20-57 20-20 57-20-57-57-20 57-20z" fill="#3d78e6"/>
+	<circle cx="718" cy="730" r="34" fill="#3d78e6"/>
+</svg>

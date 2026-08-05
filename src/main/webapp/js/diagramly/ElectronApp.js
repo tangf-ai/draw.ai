@@ -207,6 +207,25 @@ mxStencilRegistry.allowEval = false;
 		}
 	}
 
+	var aiAssistantPluginUrl = './plugins/ai-assistant.js';
+
+	function loadAiAssistant()
+	{
+		App.initPluginCallback();
+
+		if (!App.pluginsLoaded[aiAssistantPluginUrl])
+		{
+			App.pluginsLoaded[aiAssistantPluginUrl] = true;
+			App.embedModePluginsCount++;
+			mxscript(aiAssistantPluginUrl);
+		}
+	}
+
+	// Production bootstrap may call App.main before ElectronApp.js finishes
+	// loading. Register the built-in assistant immediately so it also works in
+	// fast-starting themes such as Minimal.
+	loadAiAssistant();
+
 	var origAppMain = App.main;
 	
 	App.main = async function()
@@ -222,7 +241,9 @@ mxStencilRegistry.allowEval = false;
 
 		//Load desktop plugins
 		var plugins = (mxSettings.settings != null) ? mxSettings.getPlugins() : null;
-		App.initPluginCallback();
+		// The AI assistant is shipped with the desktop application and is loaded
+		// directly here. URL and user-configured external plugins remain disabled.
+		loadAiAssistant();
 
 		if (plugins != null && plugins.length > 0)
 		{
@@ -253,6 +274,11 @@ mxStencilRegistry.allowEval = false;
 						else if (pluginUrl.startsWith('plugins/'))
 						{
 							pluginUrl = './' + pluginUrl;
+						}
+
+						if (pluginUrl == aiAssistantPluginUrl)
+						{
+							continue;
 						}
 
 						// Only built-in plugins shipped with the app are supported;
@@ -1195,7 +1221,7 @@ mxStencilRegistry.allowEval = false;
 			action: 'showOpenDialog',
 			defaultPath: lastDir || (await requestSync('getDocumentsFolder')),
 			filters: [
-				{ name: 'draw.io Diagrams', extensions: ['drawio', 'xml', 'png', 'svg', 'html', 'pdf'] },
+				{ name: 'draw.ai Diagrams', extensions: ['drawio', 'xml', 'png', 'svg', 'html', 'pdf'] },
         	    { name: 'VSDX Documents', extensions: ['vsdx'] },
         	    { name: 'Mermaid', extensions: ['mmd', 'mermaid'] },
         	    { name: 'All Files', extensions: ['*'] }

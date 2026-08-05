@@ -69,8 +69,9 @@ if (window.location.hash != null && window.location.hash.substring(0, 2) == '#P'
 }
 
 // Global variable for desktop
-var mxIsElectron = navigator.userAgent != null && navigator.userAgent.toLowerCase().indexOf(' electron/') > -1 && 
-                    navigator.userAgent.indexOf(' draw.io/') > -1;
+var mxIsElectron = navigator.userAgent != null && navigator.userAgent.toLowerCase().indexOf(' electron/') > -1 &&
+                    (navigator.userAgent.indexOf(' draw.io/') > -1 ||
+                    navigator.userAgent.indexOf(' draw.ai/') > -1);
 
 // Redirects page if required
 if (urlParams['dev'] != '1')
@@ -332,37 +333,60 @@ else
         {
             mxscript('js/app.min.js', function()
             {
-                mxScriptsLoaded = true;
-                checkAllLoaded();
-                
+                function finishAppLoad()
+                {
+                    mxScriptsLoaded = true;
+                    checkAllLoaded();
+                };
+
                 // Electron
                 if (mxIsElectron)
                 {
-                    mxscript('js/diagramly/DesktopLibrary.js', function()
+                    // app.min.js contains the upstream editor defaults. Apply
+                    // the desktop product identity before App.main creates UI.
+                    Editor.prototype.appName = 'draw.ai';
+                    Editor.logoImage = 'images/draw-ai-logo.svg';
+
+                    var brandStyle = document.createElement('style');
+                    brandStyle.textContent = '.geAppIcon{background-color:#15262d;}';
+                    document.head.appendChild(brandStyle);
+
+                    // Register the bundled assistant before App.main. Starting
+                    // the app sooner can leave Draw.loadPlugin pointing at an
+                    // already-created UI and the assistant tab never appears.
+                    var aiAssistantPluginUrl = './plugins/ai-assistant.js';
+                    App.initPluginCallback();
+                    App.pluginsLoaded[aiAssistantPluginUrl] = true;
+                    App.embedModePluginsCount++;
+
+                    mxscript(aiAssistantPluginUrl, function()
                     {
-                        mxscript('js/diagramly/ElectronApp.js', function()
+                        mxscript('js/diagramly/DesktopLibrary.js', function()
                         {
-                            mxscript('js/extensions.min.js', function()
+                            mxscript('js/diagramly/ElectronApp.js', function()
                             {
-                                mxscript('js/stencils.min.js', function()
+                                mxscript('js/extensions.min.js', function()
                                 {
-                                    mxscript('js/shapes-14-6-5.min.js', function()
+                                    mxscript('js/stencils.min.js', function()
                                     {
-                                        // ELK and Mermaid ship inside extensions.min.js
-                                        // above (elk bundle, then the ElkLayout editor
-                                        // statics, then mermaid). Loading
-                                        // js/elk/drawio-elk.min.js again would re-run its
-                                        // footer (var ElkLayout = ELK.ElkLayout) and swap
-                                        // in a bare class without the statics, breaking
-                                        // Arrange > Layout with "ElkLayout.runWithDialog
-                                        // is not a function" [jgraph/drawio-desktop#2471].
-                                        // Only PlantUML is not in extensions.min.js; it
-                                        // is preloaded here and EditorUi.loadPlantUml
-                                        // skips its own load once mxPlantUmlToDrawio is
-                                        // defined.
-                                        mxscript('js/plantuml/drawio-plantuml.min.js', function()
+                                        mxscript('js/shapes-14-6-5.min.js', function()
                                         {
-                                            mxscript('js/PostConfig.js');
+                                            // ELK and Mermaid ship inside extensions.min.js
+                                            // above (elk bundle, then the ElkLayout editor
+                                            // statics, then mermaid). Loading
+                                            // js/elk/drawio-elk.min.js again would re-run its
+                                            // footer (var ElkLayout = ELK.ElkLayout) and swap
+                                            // in a bare class without the statics, breaking
+                                            // Arrange > Layout with "ElkLayout.runWithDialog
+                                            // is not a function" [jgraph/drawio-desktop#2471].
+                                            // Only PlantUML is not in extensions.min.js; it
+                                            // is preloaded here and EditorUi.loadPlantUml
+                                            // skips its own load once mxPlantUmlToDrawio is
+                                            // defined.
+                                            mxscript('js/plantuml/drawio-plantuml.min.js', function()
+                                            {
+                                                mxscript('js/PostConfig.js', finishAppLoad);
+                                            });
                                         });
                                     });
                                 });
@@ -372,7 +396,12 @@ else
                 }
                 else if (!supportedDomain)
                 {
+                    finishAppLoad();
                     mxscript('js/PostConfig.js');
+                }
+                else
+                {
+                    finishAppLoad();
                 }
             });
         };
@@ -398,5 +427,3 @@ window.onerror = function()
         status.innerHTML = 'Page could not be loaded. Please try refreshing.';
     }
 };
-
-
