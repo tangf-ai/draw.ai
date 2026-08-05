@@ -384,6 +384,12 @@ test('keeps the AI tabs attached to floating Sketch and Minimal format windows',
 	assert.match(pluginSource, /function attachImageFile\(file\)/);
 	assert.match(pluginSource, /function isSupportedAiStyleValue\(key, value\)/);
 	assert.match(pluginSource, /已修复 .* 处 AI 输出/);
+	assert.match(pluginSource, /function startQuestionEdit\(historyIndex\)/);
+	assert.match(pluginSource, /function discardConversationFrom\(historyIndex\)/);
+	assert.match(pluginSource, /chatHistory\.splice\(historyIndex\)/);
+	assert.match(pluginSource, /userAttachments\[historyIndex\]/);
+	assert.match(pluginSource, /编辑此问题并重新提问/);
+	assert.match(pluginSource, /cancelEditButton\.addEventListener\('click', cancelQuestionEdit\)/);
 	assert.match(pluginSource, /promptInput\.addEventListener\('paste'/);
 	assert.match(pluginSource, /composer\.addEventListener\('drop'/);
 	assert.match(pluginSource, /最长边|2048/);
