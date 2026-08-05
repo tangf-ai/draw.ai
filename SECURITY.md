@@ -1,12 +1,7 @@
-# Security Policy
+# Security policy
 
-## Supported Versions
+Security fixes are supported on the latest released draw.ai version.
 
-| Version  | Supported          |
-| -------- | ------------------ |
-| Latest   | :white_check_mark: |
-| Older    | :x:                |
+Please report vulnerabilities privately through the GitHub Security Advisory page for `tangf-ai/draw.ai`. Do not open a public issue for an unpatched vulnerability. Include affected versions, reproduction steps, expected impact, and any suggested mitigation.
 
-## Reporting a Vulnerability
-
-If you discover a security vulnerability in axios please disclose it via our [huntr page](https://huntr.dev/repos/jgraph/drawio-desktop/). Bounty eligibility, CVE assignment, response times and past reports are all there.
+For vulnerabilities that are entirely within the upstream draw.io editor, also follow the upstream project's disclosure process. Do not send draw.ai API keys, diagrams, or other private data with a report unless maintainers explicitly request a minimal sanitized example.

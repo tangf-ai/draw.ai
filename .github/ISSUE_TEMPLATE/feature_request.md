@@ -4,7 +4,7 @@ about: Suggest an idea for this project
 
 ---
 
-* [ ] I agree to follow the [Code of Conduct](https://github.com/jgraph/drawio-desktop/blob/master/CODE_OF_CONDUCT.md) that this project adheres to.
+* [ ] I agree to follow the [Code of Conduct](https://github.com/tangf-ai/draw-ai-desktop/blob/main/CODE_OF_CONDUCT.md).
 * [ ] I have searched the issue tracker for a feature request that matches the one I want to file, without success.
 
 **Is your feature request related to a problem? Please describe.**

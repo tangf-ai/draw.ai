@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'">
+	<title>draw.ai 图纸工作区</title>
+	<link rel="stylesheet" href="workspace.css">
+</head>
+<body>
+	<svg class="icon-sprite" aria-hidden="true">
+		<!-- Icon paths follow the Lucide icon set geometry (ISC License). -->
+		<symbol id="icon-refresh" viewBox="0 0 24 24"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5M4 13a8.1 8.1 0 0 0 15.5 2M20 20v-5h-5"/></symbol>
+		<symbol id="icon-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+		<symbol id="icon-folder" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.7-.9L9.6 3.9A2 2 0 0 0 7.9 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></symbol>
+		<symbol id="icon-folder-open" viewBox="0 0 24 24"><path d="m6 14 1-2h13a2 2 0 0 1 1.8 2.9l-2.7 5.2a2 2 0 0 1-1.8 1.1H5.2a2 2 0 0 1-1.9-2.7L6 14Z"/><path d="M3 18V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.7.9l.8 1.2A2 2 0 0 0 13.1 6H19a2 2 0 0 1 2 2v4"/></symbol>
+		<symbol id="icon-folder-plus" viewBox="0 0 24 24"><path d="M12 10v6M15 13H9"/><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.7-.9L9.6 3.9A2 2 0 0 0 7.9 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></symbol>
+		<symbol id="icon-file-plus" viewBox="0 0 24 24"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5Z"/><polyline points="14 2 14 8 20 8"/><path d="M12 18v-6M9 15h6"/></symbol>
+		<symbol id="icon-file" viewBox="0 0 24 24"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5Z"/><polyline points="14 2 14 8 20 8"/><path d="M8 13h8M8 17h5"/></symbol>
+		<symbol id="icon-upload" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></symbol>
+		<symbol id="icon-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+		<symbol id="icon-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+		<symbol id="icon-pencil" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></symbol>
+		<symbol id="icon-copy" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2"/></symbol>
+		<symbol id="icon-move" viewBox="0 0 24 24"><path d="M2 13V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.7.9l.8 1.2A2 2 0 0 0 12.1 6H20a2 2 0 0 1 2 2v5"/><path d="M12 10v10M8 16l4 4 4-4"/></symbol>
+		<symbol id="icon-trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v5M14 11v5"/></symbol>
+		<symbol id="icon-reveal" viewBox="0 0 24 24"><path d="M15 3h6v6M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></symbol>
+		<symbol id="icon-template" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18M9 21V9"/></symbol>
+		<symbol id="icon-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+	</svg>
+
+	<div class="app-shell">
+		<header class="topbar">
+			<div class="brand">
+				<span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
+				<span>draw.ai 图纸工作区</span>
+			</div>
+			<button class="topbar-button" id="refresh-button" type="button" title="刷新工作区" aria-label="刷新工作区" data-testid="refresh-workspace">
+				<svg class="icon"><use href="#icon-refresh"></use></svg>
+			</button>
+		</header>
+
+		<aside class="sidebar" id="sidebar">
+			<button class="workspace-switch" id="workspace-switch" type="button" title="切换工作区" data-testid="workspace-switch">
+				<span class="workspace-name" id="workspace-name">图纸工作区</span>
+				<span class="workspace-path" id="workspace-path">尚未设置</span>
+			</button>
+			<div class="sidebar-heading">目录</div>
+			<nav class="directory-tree" id="directory-tree" aria-label="工作区目录"></nav>
+		</aside>
+
+		<main class="main-content">
+			<section class="setup-view" id="setup-view" hidden>
+				<div class="setup-icon" aria-hidden="true"><svg class="icon"><use href="#icon-folder-open"></use></svg></div>
+				<h1>设置图纸工作区</h1>
+				<p id="setup-message">选择一个目录作为统一的图纸存放位置。</p>
+				<div class="setup-actions">
+					<button class="button primary-button" id="default-root-button" type="button" data-testid="use-default-root">使用默认目录</button>
+					<button class="button secondary-button" id="choose-root-button" type="button" data-testid="choose-root">选择已有目录</button>
+				</div>
+			</section>
+
+			<section class="manager-view" id="manager-view" hidden>
+				<div class="heading-row">
+					<div class="heading-copy">
+						<h1 id="directory-title">全部图纸</h1>
+						<div class="breadcrumb" id="breadcrumb"></div>
+					</div>
+					<button class="button primary-button" id="new-diagram-button" type="button" data-testid="new-diagram">
+						<svg class="icon"><use href="#icon-file-plus"></use></svg><span>新建图文件</span>
+					</button>
+				</div>
+
+				<div class="toolbar">
+					<button class="button secondary-button" id="new-folder-button" type="button" data-testid="new-folder">
+						<svg class="icon"><use href="#icon-folder-plus"></use></svg><span>新建目录</span>
+					</button>
+					<button class="button secondary-button" id="import-button" type="button" data-testid="import-files">
+						<svg class="icon"><use href="#icon-upload"></use></svg><span>导入文件</span>
+					</button>
+					<button class="button secondary-button" id="template-button" type="button" data-testid="template-settings">
+						<svg class="icon"><use href="#icon-template"></use></svg><span>模板</span>
+						<span class="template-indicator" id="template-indicator" aria-hidden="true" hidden></span>
+					</button>
+					<label class="search-field">
+						<span class="visually-hidden">搜索图纸和目录</span>
+						<svg class="icon"><use href="#icon-search"></use></svg>
+						<input id="search-input" type="search" placeholder="搜索图纸和目录" autocomplete="off" data-testid="workspace-search">
+					</label>
+				</div>
+
+				<div class="file-table-wrap">
+					<table class="file-table">
+						<thead><tr><th>名称</th><th>类型</th><th>修改时间</th><th><span class="visually-hidden">操作</span></th></tr></thead>
+						<tbody id="file-list"></tbody>
+					</table>
+					<div class="empty-state" id="empty-state" hidden>
+						<svg class="icon"><use href="#icon-folder-open"></use></svg>
+						<strong id="empty-title">当前目录为空</strong>
+					</div>
+				</div>
+
+				<footer class="statusbar">
+					<span id="item-count">0 个目录，0 个图文件</span>
+					<span>本地工作区</span>
+				</footer>
+			</section>
+		</main>
+	</div>
+
+	<dialog class="dialog" id="name-dialog">
+		<form method="dialog" id="name-form">
+			<div class="dialog-header">
+				<h2 id="name-dialog-title">新建目录</h2>
+				<button class="dialog-close" value="cancel" type="submit" title="关闭" aria-label="关闭"><svg class="icon"><use href="#icon-x"></use></svg></button>
+			</div>
+			<label class="field-label" for="name-input">名称</label>
+			<input class="text-input" id="name-input" name="name" autocomplete="off" maxlength="120" required data-testid="name-input">
+			<div class="field-error" id="name-error" aria-live="polite"></div>
+			<div class="dialog-actions">
+				<button class="button secondary-button" value="cancel" type="submit">取消</button>
+				<button class="button primary-button" id="name-submit" value="default" type="submit" data-testid="name-submit">创建</button>
+			</div>
+		</form>
+	</dialog>
+
+	<dialog class="dialog transfer-dialog" id="transfer-dialog">
+		<form method="dialog" id="transfer-form">
+			<div class="dialog-header">
+				<h2 id="transfer-dialog-title">移动图文件</h2>
+				<button class="dialog-close" value="cancel" type="submit" title="关闭" aria-label="关闭"><svg class="icon"><use href="#icon-x"></use></svg></button>
+			</div>
+			<div class="transfer-file">
+				<svg class="icon" aria-hidden="true"><use href="#icon-file"></use></svg>
+				<strong id="transfer-file-name"></strong>
+			</div>
+			<label class="field-label" for="transfer-destination">目标目录</label>
+			<select class="text-input" id="transfer-destination" data-testid="transfer-destination"></select>
+			<div class="field-error" id="transfer-error" aria-live="polite"></div>
+			<div class="dialog-actions">
+				<button class="button secondary-button" value="cancel" type="submit">取消</button>
+				<button class="button primary-button" id="transfer-submit" value="default" type="submit" data-testid="transfer-submit">移动</button>
+			</div>
+		</form>
+	</dialog>
+
+	<dialog class="dialog template-dialog" id="template-dialog">
+		<form method="dialog">
+			<div class="dialog-header">
+				<h2>默认模板</h2>
+				<button class="dialog-close" value="cancel" type="submit" title="关闭" aria-label="关闭"><svg class="icon"><use href="#icon-x"></use></svg></button>
+			</div>
+			<div class="template-status">
+				<div class="template-status-icon" aria-hidden="true"><svg class="icon"><use href="#icon-template"></use></svg></div>
+				<div class="template-status-copy">
+					<div class="template-status-heading">
+						<strong id="template-status-title">空白模板</strong>
+						<span class="template-status-badge" id="template-status-badge" hidden></span>
+					</div>
+					<span class="template-status-detail" id="template-status-detail">Grid 与 Page View 关闭</span>
+				</div>
+			</div>
+			<div class="template-actions">
+				<button class="button primary-button" id="update-template-button" type="button" data-testid="update-template" hidden>
+					<svg class="icon"><use href="#icon-refresh"></use></svg><span>更新模板</span>
+				</button>
+				<button class="button primary-button" id="edit-template-button" type="button" data-testid="edit-template">
+					<svg class="icon"><use href="#icon-pencil"></use></svg><span>创建模板</span>
+				</button>
+				<button class="button secondary-button" id="import-template-button" type="button" data-testid="import-template">
+					<svg class="icon"><use href="#icon-upload"></use></svg><span>导入模板</span>
+				</button>
+			</div>
+			<div class="dialog-actions template-dialog-footer">
+				<button class="text-danger-button" id="remove-template-button" type="button" data-testid="remove-template" hidden>移除模板</button>
+				<button class="button secondary-button" value="cancel" type="submit">完成</button>
+			</div>
+		</form>
+	</dialog>
+
+	<dialog class="dialog confirm-dialog" id="confirm-dialog">
+		<form method="dialog" id="confirm-form">
+			<div class="dialog-header"><h2 id="confirm-title">移到废纸篓</h2></div>
+			<p id="confirm-message"></p>
+			<div class="dialog-actions">
+				<button class="button secondary-button" value="cancel" type="submit">取消</button>
+				<button class="button danger-button" id="confirm-submit" value="default" type="submit" data-testid="confirm-trash">移到废纸篓</button>
+			</div>
+		</form>
+	</dialog>
+
+	<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+	<script src="workspace.js"></script>
+</body>
+</html>

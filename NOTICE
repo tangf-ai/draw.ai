@@ -1,0 +1,16 @@
+draw.ai Desktop
+Copyright 2026 draw.ai contributors
+
+This product includes software developed by draw.io Ltd and contributors:
+
+- drawio-desktop: https://github.com/jgraph/drawio-desktop
+- drawio: https://github.com/jgraph/drawio
+
+Those upstream projects are distributed under the Apache License, Version 2.0.
+Their copyright, license, trademark, and attribution notices remain applicable
+to the portions incorporated into this derivative work.
+
+draw.ai is an independent community project. It is not affiliated with,
+endorsed by, or supported by draw.io Ltd or JGraph. draw.io is a trademark of
+its respective owner and is referenced only to describe origin and file-format
+compatibility.

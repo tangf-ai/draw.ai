@@ -1,6 +1,6 @@
 {
-  "appId": "com.jgraph.drawio.desktop",
-  "copyright": "Copyright 2017-2026 draw.io Ltd",
+  "appId": "ai.draw.desktop",
+  "copyright": "Copyright 2026 draw.ai contributors; portions Copyright 2017-2026 draw.io Ltd",
   "asar": true,
   "files": [
     "**/*",
@@ -23,8 +23,8 @@
     "extendInfo": {
       "UTExportedTypeDeclarations": [
         {
-          "UTTypeIdentifier": "com.jgraph.drawio",
-          "UTTypeDescription": "draw.io Diagram",
+          "UTTypeIdentifier": "ai.draw.diagram",
+          "UTTypeDescription": "draw.ai Diagram",
           "UTTypeConformsTo": ["public.xml", "public.data"],
           "UTTypeTagSpecification": {
             "public.filename-extension": ["drawio"],
@@ -35,10 +35,10 @@
       "CFBundleDocumentTypes": [
         {
           "CFBundleTypeExtensions": ["drawio"],
-          "CFBundleTypeName": "draw.io Diagram",
+          "CFBundleTypeName": "draw.ai Diagram",
           "CFBundleTypeRole": "Editor",
           "CFBundleTypeIconFile": "icon.icns",
-          "LSItemContentTypes": ["com.jgraph.drawio"],
+          "LSItemContentTypes": ["ai.draw.diagram"],
           "LSHandlerRank": "Owner"
         },
         {
@@ -77,13 +77,13 @@
   "dmg": {
   },
   "linux": {
-  	"executableName": "drawio",
+    "executableName": "draw-ai",
     "category": "Graphics",
-    "maintainer": "draw.io <desktop@draw.io>",
+    "maintainer": "draw.ai contributors",
     "icon": "./build",
     "desktop": {
       "entry": {
-        "StartupWMClass": "draw-io"
+        "StartupWMClass": "draw-ai"
       }
     },
     "target": [
@@ -113,8 +113,8 @@
   "fileAssociations": [
 	  {
 	  	"ext": "drawio",
-	  	"name": "draw.io Diagram",
-	  	"description": "draw.io Diagram",
+	    "name": "draw.ai Diagram",
+	    "description": "draw.ai Diagram",
 	  	"mimeType": "application/vnd.jgraph.mxfile",
 	  	"role": "Editor"
 	  },

@@ -7,21 +7,21 @@ import { removeShortcutIcons } from '../../build/msi-project-created.mjs';
 
 const wxs = `<?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
-  <Product Id="*" Name="draw.io" UpgradeCode="X" Version="30.3.12" Language="1033" Codepage="65001" Manufacturer="JGraph">
+  <Product Id="*" Name="draw.ai" UpgradeCode="X" Version="31.1.5" Language="1033" Codepage="65001" Manufacturer="draw.ai contributors">
     <Property Id="DISABLEADVTSHORTCUTS" Value="1"/>
-    <Icon Id="draw.ioIcon.exe" SourceFile="C:\\project\\build\\icon.ico"/>
-    <Property Id="ARPPRODUCTICON" Value="draw.ioIcon.exe"/>
+    <Icon Id="draw.aiIcon.exe" SourceFile="C:\\project\\build\\icon.ico"/>
+    <Property Id="ARPPRODUCTICON" Value="draw.aiIcon.exe"/>
     <ComponentGroup Id="ProductComponents" Directory="APPLICATIONFOLDER">
       <Component>
-      <File Name="draw.io.exe" Source="$(var.appDir)\\draw.io.exe" ReadOnly="yes" KeyPath="yes" Id="mainExecutable">
-        <Shortcut Id="desktopShortcut" Directory="DesktopFolder" Name="draw.io" WorkingDirectory="APPLICATIONFOLDER" Advertise="yes" Icon="draw.ioIcon.exe"/>
-        <Shortcut Id="startMenuShortcut" Directory="ProgramMenuFolder" Name="draw.io" WorkingDirectory="APPLICATIONFOLDER" Advertise="yes" Icon="draw.ioIcon.exe">
-          <ShortcutProperty Key="System.AppUserModel.ID" Value="com.jgraph.drawio.desktop"/>
+      <File Name="draw.ai.exe" Source="$(var.appDir)\\draw.ai.exe" ReadOnly="yes" KeyPath="yes" Id="mainExecutable">
+        <Shortcut Id="desktopShortcut" Directory="DesktopFolder" Name="draw.ai" WorkingDirectory="APPLICATIONFOLDER" Advertise="yes" Icon="draw.aiIcon.exe"/>
+        <Shortcut Id="startMenuShortcut" Directory="ProgramMenuFolder" Name="draw.ai" WorkingDirectory="APPLICATIONFOLDER" Advertise="yes" Icon="draw.aiIcon.exe">
+          <ShortcutProperty Key="System.AppUserModel.ID" Value="ai.draw.desktop"/>
         </Shortcut>
       </File>
-      <ProgId Id="draw.io.drawio" Advertise="yes" Icon="draw.ioIcon.exe" Description="draw.io Diagram">
+      <ProgId Id="draw.ai.drawio" Advertise="yes" Icon="draw.aiIcon.exe" Description="draw.ai Diagram">
         <Extension Id="drawio" Advertise="yes">
-          <Verb Id="open" Command="Open with draw.io" Argument="&quot;%1&quot;"/>
+          <Verb Id="open" Command="Open with draw.ai" Argument="&quot;%1&quot;"/>
         </Extension>
       </ProgId>
       </Component>
@@ -41,31 +41,31 @@ describe('removeShortcutIcons', () =>
 
 	test('start menu shortcut keeps its other attributes and child element', () =>
 	{
-		assert.match(patched, /<Shortcut Id="startMenuShortcut" Directory="ProgramMenuFolder" Name="draw\.io" WorkingDirectory="APPLICATIONFOLDER" Advertise="yes">/);
-		assert.match(patched, /<ShortcutProperty Key="System\.AppUserModel\.ID" Value="com\.jgraph\.drawio\.desktop"\/>/);
+		assert.match(patched, /<Shortcut Id="startMenuShortcut" Directory="ProgramMenuFolder" Name="draw\.ai" WorkingDirectory="APPLICATIONFOLDER" Advertise="yes">/);
+		assert.match(patched, /<ShortcutProperty Key="System\.AppUserModel\.ID" Value="ai\.draw\.desktop"\/>/);
 	});
 
 	test('desktop shortcut stays self-closing', () =>
 	{
-		assert.match(patched, /<Shortcut Id="desktopShortcut" Directory="DesktopFolder" Name="draw\.io" WorkingDirectory="APPLICATIONFOLDER" Advertise="yes"\/>/);
+		assert.match(patched, /<Shortcut Id="desktopShortcut" Directory="DesktopFolder" Name="draw\.ai" WorkingDirectory="APPLICATIONFOLDER" Advertise="yes"\/>/);
 	});
 
 	test('keeps the Icon table entry and Add/Remove Programs icon', () =>
 	{
-		assert.match(patched, /<Icon Id="draw\.ioIcon\.exe" SourceFile=/);
-		assert.match(patched, /<Property Id="ARPPRODUCTICON" Value="draw\.ioIcon\.exe"\/>/);
+		assert.match(patched, /<Icon Id="draw\.aiIcon\.exe" SourceFile=/);
+		assert.match(patched, /<Property Id="ARPPRODUCTICON" Value="draw\.aiIcon\.exe"\/>/);
 	});
 
 	test('keeps file association (ProgId) icons', () =>
 	{
-		assert.match(patched, /<ProgId Id="draw\.io\.drawio" Advertise="yes" Icon="draw\.ioIcon\.exe" Description="draw\.io Diagram">/);
+		assert.match(patched, /<ProgId Id="draw\.ai\.drawio" Advertise="yes" Icon="draw\.aiIcon\.exe" Description="draw\.ai Diagram">/);
 	});
 
 	test('only the Shortcut Icon attributes are removed', () =>
 	{
 		const expected = wxs
-			.replace(' Advertise="yes" Icon="draw.ioIcon.exe"/>', ' Advertise="yes"/>')
-			.replace(' Advertise="yes" Icon="draw.ioIcon.exe">\n          <ShortcutProperty', ' Advertise="yes">\n          <ShortcutProperty');
+			.replace(' Advertise="yes" Icon="draw.aiIcon.exe"/>', ' Advertise="yes"/>')
+			.replace(' Advertise="yes" Icon="draw.aiIcon.exe">\n          <ShortcutProperty', ' Advertise="yes">\n          <ShortcutProperty');
 		assert.equal(patched, expected);
 	});
 

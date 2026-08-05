@@ -1,6 +1,6 @@
 {
-  "appId": "com.jgraph.drawio.desktop",
-  "copyright": "Copyright 2017-2026 draw.io Ltd",
+  "appId": "ai.draw.desktop",
+  "copyright": "Copyright 2026 draw.ai contributors; portions Copyright 2017-2026 draw.io Ltd",
   "asar": true,
   "files": [
     "**/*",
@@ -14,10 +14,6 @@
       "provider": "github"
   },
   "win": {
-    "signtoolOptions": {
-      "publisherName": ["JGraph Ltd", "draw.io Ltd"],
-      "sign": "build/sign-trusted.mjs"
-    },
     "target": [
       {
           "target": "nsis",
@@ -48,8 +44,8 @@
   "fileAssociations": [
 	  {
 	  	"ext": "drawio",
-	  	"name": "draw.io Diagram",
-	  	"description": "draw.io Diagram",
+	    "name": "draw.ai Diagram",
+	    "description": "draw.ai Diagram",
 	  	"mimeType": "application/vnd.jgraph.mxfile",
 	  	"role": "Editor"
 	  },

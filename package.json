@@ -1,7 +1,8 @@
 {
-  "name": "draw.io",
+  "name": "draw.ai",
+  "productName": "draw.ai",
   "version": "31.1.5",
-  "description": "draw.io desktop",
+  "description": "Open-source AI diagram workspace based on draw.io",
   "exports": "./src/main/electron.js",
   "type": "module",
   "main": "src/main/electron.js",
@@ -11,7 +12,8 @@
   "scripts": {
     "start": "electron .",
     "sync": "node ./sync.cjs",
-    "test": "node --test src/test/cli-args.test.js src/test/msi-project-created.test.js src/test/window-bounds.test.js",
+    "test": "node --test src/test/ai-assistant.test.js src/test/branding.test.js src/test/cli-args.test.js src/test/msi-project-created.test.js src/test/user-data-migration.test.js src/test/window-bounds.test.js src/test/workspace-files.test.js",
+	"generate-icons": "node build/generate-icons.mjs",
     "release-win": "electron-builder --config electron-builder-win.json --publish always",
     "release-win32": "electron-builder --config electron-builder-win32.json --publish always",
     "release-win-arm64": "electron-builder --config electron-builder-win-arm64.json --publish always",
@@ -21,20 +23,22 @@
   },
   "repository": {
     "type": "git",
-    "url": "git@github.com:jgraph/drawio-desktop.git"
+    "url": "https://github.com/tangf-ai/draw.ai.git"
   },
   "keywords": [
+    "draw.ai",
     "draw.io",
+    "AI",
     "diagram",
     "flowchart",
     "UML"
   ],
-  "author": "JGraph <support@draw.io>",
+  "author": "draw.ai contributors",
   "license": "Apache-2.0",
   "bugs": {
-    "url": "https://github.com/jgraph/drawio-desktop/issues"
+    "url": "https://github.com/tangf-ai/draw.ai/issues"
   },
-  "homepage": "https://github.com/jgraph/drawio",
+  "homepage": "https://github.com/tangf-ai/draw.ai",
   "dependencies": {
     "@cantoo/pdf-lib": "^2.7.3",
     "buffer": "^6.0.3",

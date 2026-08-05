@@ -7,7 +7,7 @@ about: Create a report to help us improve
 ### Preflight Checklist
 <!-- Please ensure you've completed the following steps by replacing [ ] with [x]-->
 
-* [ ] I agree to follow the [Code of Conduct](https://github.com/jgraph/drawio-desktop/blob/master/CODE_OF_CONDUCT.md) that this project adheres to.
+* [ ] I agree to follow the [Code of Conduct](https://github.com/tangf-ai/draw-ai-desktop/blob/main/CODE_OF_CONDUCT.md).
 * [ ] I have searched the issue tracker for a feature request that matches the one I want to file, without success.
 
 You must agree to search and the code of conduct. You must fill in this entire template. If you delete part/all or miss parts out your issue will be closed.
@@ -28,9 +28,9 @@ A clear and concise description of what you expected to happen.
 **Screenshots**
 If applicable, add screenshots to help explain your problem.
 
-**draw.io version (In the Help->About menu of the draw.io editor):**
+**draw.ai version and bundled draw.io editor version:**
 
-- draw.io version x.y.z
+- draw.ai version x.y.z
 
 **Desktop (please complete the following information):**
  - OS: Windows, MacOS, Linux...

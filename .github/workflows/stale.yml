@@ -21,8 +21,8 @@ jobs:
     - uses: actions/stale@v10
       with:
         repo-token: ${{ secrets.GITHUB_TOKEN }}
-        stale-issue-message: 'This issue has been automatically marked as stale because it has not had recent activity. It will be closed if no further activity occurs. Thank you for your contributions. See [the FAQ](https://github.com/jgraph/drawio/wiki/Stale-bot-FAQ) for more information.'
-        stale-pr-message: 'This issue has been automatically marked as stale because it has not had recent activity. It will be closed if no further activity occurs. Thank you for your contributions. See [the FAQ](https://github.com/jgraph/drawio/wiki/Stale-bot-FAQ) for more information.'
+        stale-issue-message: 'This issue has been marked as stale because it has not had recent activity. Add current reproduction details if it is still relevant.'
+        stale-pr-message: 'This pull request has been marked as stale because it has not had recent activity. Add an update if the work should remain open.'
         stale-issue-label: 'wontfix'
         stale-pr-label: 'wontfix'
         close-issue-label: 'declined'

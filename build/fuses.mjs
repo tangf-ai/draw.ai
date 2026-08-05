@@ -5,7 +5,8 @@ import builder from 'electron-builder';
 
 async function addElectronFuses(context)
 {
-    const { appOutDir, packager: { appInfo: { productFilename } }, electronPlatformName, arch } = context;
+    const { appOutDir, packager, electronPlatformName, arch } = context;
+    const { appInfo: { productFilename }, platformSpecificBuildOptions } = packager;
 
     const ext = {
         darwin: '.app',
@@ -15,7 +16,7 @@ async function addElectronFuses(context)
 
     const IS_LINUX = electronPlatformName === 'linux';
     const executableName = IS_LINUX
-        ? productFilename.replace('.', '') // Remove . from "draw.io"
+        ? (platformSpecificBuildOptions.executableName || productFilename.replace('.', ''))
         : productFilename;
 
     const electronBinaryPath = path.join(appOutDir, `${executableName}${ext}`);

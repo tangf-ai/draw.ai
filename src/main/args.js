@@ -143,9 +143,9 @@ const LONG_MAP  = new Map(OPTION_DEFS.filter(d => !d.helpOnly).map(d => [d.long,
 export function formatHelp(version)
 {
 	const lines = [
-		`draw.io ${version}`,
+		`draw.ai ${version}`,
 		'',
-		'Usage: drawio [options] [input file/folder]...',
+		'Usage: draw-ai [options] [input file/folder]...',
 		'',
 		'Options:',
 	];
@@ -171,7 +171,7 @@ export function formatHelp(version)
 }
 
 /**
- * Parse draw.io CLI arguments.
+ * Parse draw.ai CLI arguments.
  *
  * argv is process.argv, possibly with a leading null inserted by the Electron
  * packaged-app workaround (github.com/electron/electron/issues/4690).

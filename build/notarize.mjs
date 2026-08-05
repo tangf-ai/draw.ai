@@ -8,8 +8,8 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const APPEX_BUNDLE_ID = 'com.jgraph.drawio.desktop.PreviewExtension';
-const DRAWIO_UTI = 'com.jgraph.drawio';
+const APPEX_BUNDLE_ID = 'ai.draw.desktop.PreviewExtension';
+const DRAWIO_UTI = 'ai.draw.diagram';
 
 /**
  * Finds the codesign identity used to sign the app bundle.
@@ -42,7 +42,7 @@ function getSigningIdentity(appPath)
  * Copies the quicklookjs PreviewExtension.appex into the app bundle,
  * replaces the default preview.html with our draw.io viewer, bundles
  * viewer-static.min.js, and writes a custom Info.plist declaring the
- * com.jgraph.drawio UTI.
+ * draw.ai diagram UTI.
  *
  * This runs in afterSign (after electron-builder has signed the app)
  * so the .appex is never present in an unsigned state during the
@@ -113,7 +113,7 @@ function setupQuickLookExtension(appPath, appVersion)
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>draw.io Quick Look</string>
+	<string>draw.ai Quick Look</string>
 	<key>CFBundleExecutable</key>
 	<string>PreviewExtension</string>
 	<key>CFBundleIdentifier</key>
@@ -261,7 +261,7 @@ export default async function notarizing(context) {
 
   return await notarize({
     tool: "notarytool",
-    appBundleId: 'com.jgraph.drawio.desktop',
+    appBundleId: 'ai.draw.desktop',
     appPath: appPath,
     appleId: process.env.APPLEID,
     appleIdPassword: process.env.APPLEIDPASS,

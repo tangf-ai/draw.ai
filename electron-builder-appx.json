@@ -1,6 +1,6 @@
 {
-  "appId": "com.jgraph.drawio.desktop",
-  "copyright": "Copyright 2017-2026 draw.io Ltd",
+  "appId": "ai.draw.desktop",
+  "copyright": "Copyright 2026 draw.ai contributors; portions Copyright 2017-2026 draw.io Ltd",
   "asar": true,
   "files": [
     "**/*",
@@ -25,17 +25,17 @@
     ]
   },
   "appx": {
-    "displayName": "draw.io Diagrams",
-    "publisherDisplayName": "draw.io Ltd",
-    "identityName": "draw.io.draw.ioDiagrams",
-    "publisher": "CN=9E628CCB-BE04-4557-A5A8-81EC34B09733"
+    "displayName": "draw.ai Diagrams",
+    "publisherDisplayName": "draw.ai contributors",
+    "identityName": "draw.ai.desktop",
+    "publisher": "CN=draw.ai"
   },
   "afterPack": "build/fuses.mjs",
   "fileAssociations": [
 	  {
 	  	"ext": "drawio",
-	  	"name": "draw.io Diagram",
-	  	"description": "draw.io Diagram",
+	    "name": "draw.ai Diagram",
+	    "description": "draw.ai Diagram",
 	  	"mimeType": "application/vnd.jgraph.mxfile",
 	  	"role": "Editor"
 	  },

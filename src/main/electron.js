@@ -2,8 +2,8 @@ import fs from 'fs';
 import { promises as fsProm } from 'fs';
 import path from 'path';
 import url from 'url';
-import {Menu as menu, shell, dialog, session, screen, 
-		clipboard, nativeImage, ipcMain, app, BrowserWindow} from 'electron';
+import {Menu as menu, shell, dialog, session, screen, safeStorage,
+	clipboard, nativeImage, ipcMain, app, BrowserWindow} from 'electron';
 import crc from 'crc';
 import zlib from 'zlib';
 import log from'electron-log';
@@ -17,8 +17,26 @@ import ProgressBar from './progress-bar.js';
 import contextMenu from 'electron-context-menu';
 import {spawn, exec} from 'child_process';
 import {disableUpdate as disUpPkg} from './disableUpdate.js';
+import {createWorkspaceController, workspaceCodeUrl} from './workspace-window.js';
+import {createAiAssistantService} from './ai-assistant.js';
+import {migrateLegacyUserData} from './user-data-migration.js';
 
 let store;
+let aiAssistantService;
+
+try
+{
+	const migratedEntries = migrateLegacyUserData(app.getPath('userData'));
+
+	if (migratedEntries.length > 0)
+	{
+		console.log('Migrated draw.io user data to draw.ai:', migratedEntries.join(', '));
+	}
+}
+catch (e)
+{
+	console.warn('Failed to migrate legacy draw.io user data:', e);
+}
 
 try
 {
@@ -29,6 +47,8 @@ catch (e)
 	console.error('Failed to initialize electron-store:', e);
 	store = null;
 }
+
+aiAssistantService = createAiAssistantService({store, safeStorage});
 
 // One-shot migration: detect whether this is a fresh install or an update,
 // so we can seed the drawio Configuration's defaultAdaptiveColors accordingly.
@@ -80,19 +100,21 @@ autoUpdater.logger.transports.console.level = 'error'
 autoUpdater.autoDownload = false
 autoUpdater.autoInstallOnAppQuit = silentUpdate
 
-const UPDATE_DOWNLOAD_URL = 'https://get.draw.io';
+const PROJECT_URL = 'https://github.com/tangf-ai/draw.ai';
+const UPDATE_DOWNLOAD_URL = PROJECT_URL + '/releases';
 let updateFailureDialogShown = false;
 
-// Shows a user-facing fallback message when the in-app updater fails for any reason.
-// Deduped within a short window so a single underlying failure (which can fan out into
-// both a sync throw and an 'error' event) doesn't produce stacked dialogs.
+// Background checks are best-effort and only log failures. A user-triggered check
+// keeps the existing fallback dialog so a click never appears to do nothing.
 function notifyUpdateFailure(err, context)
 {
+	const shouldShowDialog = manualUpdateCheck;
 	manualUpdateCheck = false;
 
 	try { log.error('Update failure (' + (context || 'unknown') + '):', err); }
 	catch (e) { /* swallow logger errors */ }
 
+	if (!shouldShowDialog) return;
 	if (updateFailureDialogShown) return;
 	updateFailureDialogShown = true;
 	setTimeout(() => { updateFailureDialogShown = false; }, 5000);
@@ -103,7 +125,7 @@ function notifyUpdateFailure(err, context)
 		{
 			type: 'error',
 			title: 'Update Error',
-			message: 'There was a problem updating draw.io.',
+			message: 'There was a problem updating draw.ai.',
 			detail: 'Please manually download and update from ' + UPDATE_DOWNLOAD_URL
 		});
 	}
@@ -186,6 +208,7 @@ contextMenu({
 const __DEV__ = process.env.DRAWIO_ENV === 'dev'
 		
 let windowsRegistry = []
+let workspaceController = null
 let cmdQPressed = false
 let firstWinLoaded = false
 let firstWinFilePath = null
@@ -397,7 +420,7 @@ function createWindow (opt = {})
 		backgroundColor: '#FFF',
 		width: lastWinSize.width,
 		height: lastWinSize.height,
-		icon: `${codeDir}/images/drawlogo256.png`,
+		icon: path.join(__dirname, '../../build/icon.png'),
 		webviewTag: false,
 		webSecurity: true,
 		webPreferences: {
@@ -631,6 +654,68 @@ function createWindow (opt = {})
 	return mainWindow
 }
 
+function openEditorWindow(argsObj = {args: []}, opt = {})
+{
+	if (Array.isArray(argsObj.args))
+	{
+		for (const filePath of argsObj.args)
+		{
+			if (typeof filePath === 'string' && fs.existsSync(filePath))
+			{
+				blessPath(filePath);
+			}
+		}
+	}
+
+	const win = createWindow(opt);
+	let pageLoaded = false;
+	let appLoaded = false;
+	let delivered = false;
+
+	function cleanup()
+	{
+		ipcMain.removeListener('app-load-finished', onAppLoaded);
+	}
+
+	function deliverArgs()
+	{
+		if (!pageLoaded || !appLoaded || delivered || win.isDestroyed()) return;
+
+		if (firstWinFilePath != null)
+		{
+			argsObj.args = Array.isArray(argsObj.args) ? [...argsObj.args, firstWinFilePath] : [firstWinFilePath];
+			blessPath(firstWinFilePath);
+			firstWinFilePath = null;
+		}
+
+		delivered = true;
+		cleanup();
+		win.webContents.send('args-obj', argsObj);
+	}
+
+	function onAppLoaded(event)
+	{
+		if (event.sender !== win.webContents || !validateSender(event.senderFrame)) return;
+		appLoaded = true;
+		deliverArgs();
+	}
+
+	ipcMain.on('app-load-finished', onAppLoaded);
+
+	win.webContents.once('did-finish-load', () =>
+	{
+		firstWinLoaded = true;
+		pageLoaded = true;
+		migrateLegacyRecentsOnce(win.webContents);
+		win.webContents.zoomFactor = appZoom;
+		win.webContents.setVisualZoomLevelLimits(1, appZoom);
+		deliverArgs();
+	});
+
+	win.once('closed', cleanup);
+	return win;
+}
+
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
@@ -668,9 +753,9 @@ app.whenReady().then(() =>
 	{
 		const url = details.url.replace(/\/.\:\//, str => str.toUpperCase());
 
-		if (!url.startsWith(codeUrl))
+		if (!url.startsWith(codeUrl) && !url.startsWith(workspaceCodeUrl))
 		{
-			console.log('Blocked loading file from ' + details.url, url, codeUrl);
+			console.log('Blocked loading file from ' + details.url, url, codeUrl, workspaceCodeUrl);
 			callback({cancel: true});
 		}
 		else
@@ -1286,128 +1371,95 @@ app.whenReady().then(() =>
     	return;
 	}
     
-    //Prevent multiple instances of the application (casuses issues with configuration)
-    const gotTheLock = app.requestSingleInstanceLock()
+	workspaceController = createWorkspaceController({
+		app: app,
+		BrowserWindow: BrowserWindow,
+		dialog: dialog,
+		ipcMain: ipcMain,
+		shell: shell,
+		store: store,
+		isDev: __DEV__,
+		onWorkspaceReady: () =>
+		{
+			firstWinLoaded = true;
 
-    if (!gotTheLock) 
-    {
+			if (firstWinFilePath != null)
+			{
+				const pendingFilePath = firstWinFilePath;
+				firstWinFilePath = null;
+				openEditorWindow({args: [pendingFilePath]});
+			}
+		},
+		openDiagram: filePath => openEditorWindow({args: [filePath]}),
+		registerWindow: workspaceWindow =>
+		{
+			windowsRegistry.push(workspaceWindow);
+			workspaceWindow.on('closed', () =>
+			{
+				const index = windowsRegistry.indexOf(workspaceWindow);
+				if (index >= 0) windowsRegistry.splice(index, 1);
+			});
+		}
+	});
+
+	// Prevent multiple instances of the application (causes issues with configuration)
+	const gotTheLock = app.requestSingleInstanceLock()
+
+	if (!gotTheLock)
+	{
 		app.quit()
-    } 
-    else 
-    {
-    	app.on('second-instance', (event, commandLine, workingDirectory) => {
+	}
+	else
+	{
+		app.on('second-instance', (event, commandLine, workingDirectory) =>
+		{
 			// Creating a new window while a save/open dialog is open crashes the app
 			if (dialogOpen) return;
 
-    		//Create another window
-    		let win = createWindow()
+			const filePath = commandLine.at(-1);
+			const fileStat = statSafe(filePath);
 
-			let loadEvtCount = 0;
-			
-			function loadFinished(e)
+			if (fileStat != null && fileStat.isFile())
 			{
-				if (e != null && !validateSender(e.senderFrame)) return null;
-
-				loadEvtCount++;
-				
-				if (loadEvtCount == 2)
-				{
-	    	    	//Open the file if new app request is from opening a file.
-	    	    	//Must be a regular file: the trailing token of a dev-mode
-	    	    	//launch is the app directory ".", and reading a directory
-	    	    	//shows an EISDIR error dialog.
-	    	    	var potFile = commandLine.pop();
-	    	    	var potStat = statSafe(potFile);
-
-	    	    	if (potStat != null && potStat.isFile())
-	    	    	{
-	    	    		// User intent: launched the app from CLI / file association
-	    	    		// while another instance was already running.
-	    	    		blessPath(potFile);
-	    	    		win.webContents.send('args-obj', {args: [potFile]});
-	    	    	}
-				}
+				openEditorWindow({args: [filePath]});
 			}
-			
-			//Order of these two events is not guaranteed, so wait for them async.
-			//TOOD There is still a chance we catch another window 'app-load-finished' if user created multiple windows quickly 
-	    	ipcMain.once('app-load-finished', loadFinished);
-    	    
-    	    win.webContents.on('did-finish-load', function()
-    	    {    			
-    	        win.webContents.zoomFactor = appZoom;
-    	        win.webContents.setVisualZoomLevelLimits(1, appZoom);
-				loadFinished();
-    	    });
-    	})
-    }
-
-    let win = createWindow()
-    
-	let loadEvtCount = 0;
-			
-	function loadFinished(e)
-	{
-		if (e != null && !validateSender(e.senderFrame)) return null;
-
-		loadEvtCount++;
-		
-		if (loadEvtCount == 2)
-		{
-			// User intent: paths passed on the command line / file association.
-			if (Array.isArray(parsedArgs))
+			else
 			{
-				// Directories cannot be opened as diagrams (reading one shows
-				// an EISDIR error dialog), so drop them here. Nonexistent
-				// paths are kept: they reach the renderer as before.
-				parsedArgs = parsedArgs.filter(a =>
-				{
-					if (typeof a !== 'string' || !a) return false;
-
-					const st = statSafe(a);
-					return st == null || !st.isDirectory();
-				});
-
-				for (const a of parsedArgs)
-				{
-					if (fs.existsSync(a))
-					{
-						blessPath(a);
-					}
-				}
+				workspaceController.createWindow();
 			}
-
-			//Sending entire program is not allowed in Electron 9 as it is not native JS object
-			win.webContents.send('args-obj', {args: parsedArgs, create: options.create, layout: options.layout, mermaidImage: options.mermaidImage});
-		}
+		})
 	}
-	
-	//Order of these two events is not guaranteed, so wait for them async.
-	//TOOD There is still a chance we catch another window 'app-load-finished' if user created multiple windows quickly 
-	ipcMain.once('app-load-finished', loadFinished);
 
-    win.webContents.on('did-finish-load', function()
-    {
-    	if (firstWinFilePath != null)
-		{
-    		if (parsedArgs != null)
-    		{
-    			parsedArgs.push(firstWinFilePath);
-    		}
-    		else
-			{
-    			parsedArgs = [firstWinFilePath];
-			}
-		}
+	let startupArgs = Array.isArray(parsedArgs) ? [...parsedArgs] : [];
 
-    	firstWinLoaded = true;
+	if (firstWinFilePath != null)
+	{
+		startupArgs.push(firstWinFilePath);
+		firstWinFilePath = null;
+	}
 
-    	migrateLegacyRecentsOnce(win.webContents);
+	// Directories cannot be opened as diagrams. Nonexistent paths are retained
+	// for compatibility with the existing create/open error flow.
+	startupArgs = startupArgs.filter(candidate =>
+	{
+		if (typeof candidate !== 'string' || !candidate) return false;
+		const stat = statSafe(candidate);
+		return stat == null || !stat.isDirectory();
+	});
 
-        win.webContents.zoomFactor = appZoom;
-        win.webContents.setVisualZoomLevelLimits(1, appZoom);
-		loadFinished();
-    });
+	if (startupArgs.length > 0 || options.create || options.layout || options.mermaidImage != null)
+	{
+		openEditorWindow({
+			args: startupArgs,
+			create: options.create,
+			layout: options.layout,
+			mermaidImage: options.mermaidImage
+		});
+	}
+	else
+	{
+		workspaceController.createWindow();
+	}
 	
 	function toggleSpellCheck(e)
 	{
@@ -1493,10 +1545,18 @@ app.whenReady().then(() =>
 	var zoomSteps = [0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1,
 		1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5];
 
+	function getActiveWindow()
+	{
+		const activeWindow = BrowserWindow.getFocusedWindow();
+		return activeWindow != null && !activeWindow.isDestroyed() ? activeWindow : null;
+	}
+
 	// Zooms to the next zoom step
 	function zoomInFn()
 	{
-		var zoomFactor = win.webContents.zoomFactor;
+		const activeWindow = getActiveWindow();
+		if (activeWindow == null) return;
+		var zoomFactor = activeWindow.webContents.zoomFactor;
 		var newZoomFactor = zoomSteps[zoomSteps.length - 1];
 
 		for (var i = 0; i < zoomSteps.length; i++)
@@ -1508,13 +1568,15 @@ app.whenReady().then(() =>
 			}
 		}
 
-		win.webContents.zoomFactor = newZoomFactor;
+		activeWindow.webContents.zoomFactor = newZoomFactor;
 	};
 
 	// Zooms to the previous zoom step
 	function zoomOutFn()
 	{
-		var zoomFactor = win.webContents.zoomFactor;
+		const activeWindow = getActiveWindow();
+		if (activeWindow == null) return;
+		var zoomFactor = activeWindow.webContents.zoomFactor;
 		var newZoomFactor = zoomSteps[0];
 
 		for (var i = zoomSteps.length - 1; i >= 0; i--)
@@ -1526,13 +1588,14 @@ app.whenReady().then(() =>
 			}
 		}
 
-		win.webContents.zoomFactor = newZoomFactor;
+		activeWindow.webContents.zoomFactor = newZoomFactor;
 	};
 
 	// Resets the zoom factor
 	function resetZoomFn()
 	{
-		win.webContents.zoomFactor = 1;
+		const activeWindow = getActiveWindow();
+		if (activeWindow != null) activeWindow.webContents.zoomFactor = 1;
 	};
 
 	let checkForUpdates = {
@@ -1559,17 +1622,19 @@ app.whenReady().then(() =>
 		const currentHours = store?.get('updateCheckIntervalHours') ?? DEFAULT_UPDATE_CHECK_HOURS;
 		const buttons = hours.map(h => h === 168 ? '1 week' : `${h} hours`);
 		buttons.push('Cancel');
-
-		dialog.showMessageBox(win,
-		{
+		const options = {
 			type: 'question',
 			title: 'Update Check Interval',
-			message: 'How often should draw.io check for updates?',
+			message: 'How often should draw.ai check for updates?',
 			detail: `Current interval: ${currentHours === 168 ? '1 week' : currentHours + ' hours'}`,
 			buttons: buttons,
 			defaultId: hours.indexOf(currentHours) >= 0 ? hours.indexOf(currentHours) : hours.indexOf(DEFAULT_UPDATE_CHECK_HOURS),
 			cancelId: buttons.length - 1
-		}).then(result =>
+		};
+		const activeWindow = getActiveWindow();
+		const resultPromise = activeWindow != null ? dialog.showMessageBox(activeWindow, options) : dialog.showMessageBox(options);
+
+		resultPromise.then(result =>
 		{
 			if (result.response < hours.length && store != null)
 			{
@@ -1610,11 +1675,11 @@ app.whenReady().then(() =>
 	      submenu: [
 	        {
 	          label: 'About ' + app.name,
-	          click() { shell.openExternal('https://www.drawio.com'); }
+	          click() { shell.openExternal(PROJECT_URL); }
 	        },
 	        {
 	          label: 'Support',
-	          click() { shell.openExternal('https://github.com/jgraph/drawio-desktop/issues'); }
+	          click() { shell.openExternal(PROJECT_URL + '/issues'); }
 			},
 			checkForUpdates,
 			autoCheckForUpdates,
@@ -1664,8 +1729,8 @@ app.whenReady().then(() =>
 	
 	safeUpdaterCall('setFeedURL', () => autoUpdater.setFeedURL({
 		provider: 'github',
-		repo: 'drawio-desktop',
-		owner: 'jgraph'
+		repo: 'draw.ai',
+		owner: 'tangf-ai'
 	}))
 	
 	// Cache update check - configurable interval (default: 24 hours)
@@ -1721,7 +1786,14 @@ app.on('activate', function ()
 	// dock icon is clicked and there are no other windows open.
 	if (windowsRegistry.length === 0)
 	{
-		createWindow()
+		if (workspaceController != null)
+		{
+			workspaceController.createWindow();
+		}
+		else
+		{
+			createWindow()
+		}
 	}
 })
 
@@ -1738,32 +1810,7 @@ app.on('will-finish-launching', function()
 
 	    if (firstWinLoaded)
 	    {
-		    let win = createWindow();
-		    
-			let loadEvtCount = 0;
-			
-			function loadFinished(e)
-			{
-				if (e != null && !validateSender(e.senderFrame)) return null;
-
-				loadEvtCount++;
-				
-				if (loadEvtCount == 2)
-				{
-	    	    	win.webContents.send('args-obj', {args: [filePath]});
-				}
-			}
-			
-			//Order of these two events is not guaranteed, so wait for them async.
-			//TOOD There is still a chance we catch another window 'app-load-finished' if user created multiple windows quickly 
-	    	ipcMain.once('app-load-finished', loadFinished);
-    	    
-		    win.webContents.on('did-finish-load', function()
-		    {
-		        win.webContents.zoomFactor = appZoom;
-		        win.webContents.setVisualZoomLevelLimits(1, appZoom);
-				loadFinished();
-		    });
+			openEditorWindow({args: [filePath]});
 	    }
 	    else
 		{
@@ -1805,6 +1852,8 @@ app.on('web-contents-created', (event, contents) => {
 	})
 })
 
+app.on('before-quit', () => workspaceController?.stop());
+
 autoUpdater.on('error', e => notifyUpdateFailure(e, 'autoUpdater error event'))
 
 autoUpdater.on('update-available', safeUpdaterListener('update-available', (info) =>
@@ -1822,8 +1871,8 @@ autoUpdater.on('update-available', safeUpdaterListener('update-available', (info
 	{
 		type: 'question',
 		buttons: ['Ok', 'Cancel', 'Don\'t Ask Again'],
-		title: 'Confirm draw.io Update',
-		message: `draw.io update available (${app.getVersion()} → ${info.version}).\n\nWould you like to download and install new version?`,
+		title: 'Confirm draw.ai Update',
+		message: `draw.ai update available (${app.getVersion()} → ${info.version}).\n\nWould you like to download and install new version?`,
 		detail: 'Application will automatically restart to apply update after download',
 	}).then( result =>
 	{
@@ -1832,8 +1881,8 @@ autoUpdater.on('update-available', safeUpdaterListener('update-available', (info
 			safeUpdaterCall('downloadUpdate (manual)', () => autoUpdater.downloadUpdate())
 
 			var progressBar = new ProgressBar({
-				title: 'draw.io Update',
-			    text: 'Downloading draw.io update...'
+				title: 'draw.ai Update',
+			    text: 'Downloading draw.ai update...'
 			});
 
 			function reportUpdateError(e)
@@ -1880,8 +1929,8 @@ autoUpdater.on('update-available', safeUpdaterListener('update-available', (info
 
 					progressBar = new ProgressBar({
 						indeterminate: false,
-						title: 'draw.io Update',
-						text: 'Downloading draw.io update...',
+						title: 'draw.ai Update',
+						text: 'Downloading draw.ai update...',
 						detail: `${percent}% ...`,
 						initialValue: percent
 					});
@@ -3914,6 +3963,21 @@ ipcMain.on("rendererReq", async (event, args) =>
 			// Kept so an older bundled webapp degrades to the disabled
 			// message in the Plugins dialog instead of failing
 			ret = false;
+			break;
+		case 'aiGetConfig':
+			ret = aiAssistantService.getConfig();
+			break;
+		case 'aiSaveConfig':
+			ret = aiAssistantService.saveConfig(args.config);
+			break;
+		case 'aiTestConfig':
+			ret = await aiAssistantService.testConfig(args.config);
+			break;
+		case 'aiChat':
+			ret = await aiAssistantService.chat(args.input, progress =>
+			{
+				event.reply('mainResp', {progress: true, data: progress, reqId: args.reqId});
+			});
 			break;
 		case 'dirname':
 			reqStr(args.path, 'path');

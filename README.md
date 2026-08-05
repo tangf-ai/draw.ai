@@ -1,82 +1,104 @@
-About
------ 
+<p align="center">
+  <img src="build/icon.svg" width="112" alt="draw.ai logo">
+</p>
 
-**drawio-desktop** is a diagramming desktop app based on [Electron](https://electronjs.org/) that wraps the [core draw.io editor](https://github.com/jgraph/drawio).
+<h1 align="center">draw.ai</h1>
 
-Download built binaries from the [releases section](https://github.com/jgraph/drawio-desktop/releases).
+<p align="center">
+  A local-first desktop workspace for creating and managing diagrams with AI.
+</p>
 
-**Can I use this app for free?** Yes, under the apache 2.0 license. If you don't change the code and accept it is provided "as-is", you can use it for any purpose.
+<p align="center">
+  <a href="README.zh-CN.md">简体中文</a> · English
+</p>
 
-Windows installation
---------------------
+draw.ai brings a unified file workspace, reusable templates, image-aware AI assistance, and the mature draw.io editor into one open-source desktop application. Diagrams remain standard, editable `.drawio` files.
 
-Three flavours of Windows download are published on the [releases page](https://github.com/jgraph/drawio-desktop/releases):
+> draw.ai is an independent community project based on the Apache-2.0-licensed draw.io projects. It is not affiliated with, endorsed by, or supported by draw.io Ltd or JGraph. draw.io is a trademark of its respective owner.
 
-- `draw.io-<version>-windows-installer.exe` — NSIS installer. Installs **per-machine** into `Program Files` and **requires administrator privileges**.
-- `draw.io-<version>.msi` — MSI installer. Installs **per-user** into the user's profile and **does not require administrator privileges**. Use this one if you don't have admin rights on your machine.
-- `draw.io-<version>-windows-no-installer.exe` — portable build that runs without any installation (and therefore without admin rights). File-type associations are not registered.
+## Features
 
-The Microsoft Store (APPX) build is also installable per-user without admin rights via the Store.
+- **Unified workspace**: create folders and diagrams, search, import, rename, duplicate, move, reveal, and move files to the system trash from one window.
+- **Reusable diagram template**: configure the content used for every new diagram.
+- **Synchronized template source**: track a template in iCloud Drive or another synchronized folder, detect newer external versions, and explicitly update the local hidden working copy.
+- **AI diagram assistant**: discuss the current diagram, generate editable shapes, apply proposed changes, and roll back the most recent AI application.
+- **Image-to-diagram**: upload, paste, or drag a PNG, JPEG, or WebP image. The assistant can reconstruct a screenshot or hand-drawn sketch as editable boxes, connectors, text, and hierarchy.
+- **Configurable AI provider**: use an OpenAI-compatible endpoint and configure the API key, model, system prompt, and optimization instructions inside the app.
+- **Cross-platform packaging**: macOS, Windows, and Linux build configurations are included.
 
-Security
---------
+## Quick start
 
-draw.io Desktop is designed to be completely isolated from the Internet, apart from the update process. This checks github.com at startup for a newer version and downloads it from an AWS S3 bucket owned by Github. To disable the update check entirely (e.g. for centrally-managed installs), set the `DRAWIO_DISABLE_UPDATE=true` environment variable or pass `--disable-update` on launch. All JavaScript files are self-contained, the Content Security Policy forbids running remotely loaded JavaScript.
+Requirements: Git, Node.js 22.12 or newer, and npm.
 
-No diagram data is ever sent externally, nor do we send any analytics about app usage externally. The Content Security Policy on the web part of the interface forbids remotely-loaded JavaScript and restricts the application's own network connections to itself, so the app cannot transmit your diagrams or otherwise phone home. Note that a diagram can reference external media - for example an image, background or font loaded from a URL embedded in the diagram - and these are fetched when the diagram is opened so that it renders correctly. Opening a diagram from an untrusted source may therefore trigger a request to the referenced URL, which can reveal metadata such as your IP address to that server; no diagram content is transmitted.
+```bash
+git clone --recursive https://github.com/tangf-ai/draw.ai.git
+cd draw.ai
+npm install
+npm test
+npm start
+```
 
-Security and isolating the app are the primarily objectives of draw.io desktop. If you ask for anything that involves external connections enabled in the app by default, the answer will be no.
+The repository uses two branches in the same GitHub project:
 
-Support
--------
+- `main`: Electron desktop application and workspace features.
+- `editor`: draw.ai's editor fork, checked out at `drawio/` as a Git submodule.
 
-Support is provided on a reasonable business constraints basis, but without anything contractually binding. All support is provided via this repo. There is no private ticketing support for non-paying users.
+If the repository was cloned without `--recursive`, initialize the editor with:
 
-Purchasing draw.io for Confluence or Jira does not entitle you to commercial support for draw.io desktop.
+```bash
+git submodule update --init --recursive
+```
 
-Developing
-----------
+## Using the AI assistant
 
-**draw.io** is a git submodule of **drawio-desktop**. To get both you need to clone recursively:
+1. Open a diagram and select the **AI Assistant** tab in the right sidebar.
+2. Open AI settings and configure an OpenAI-compatible base URL, API key, and vision-capable model when using images.
+3. Enter a request, or paste, upload, or drag in a reference image.
+4. Review the proposed diagram update before applying it.
+5. Use **Roll back** to undo the latest applied AI change.
 
-`git clone --recursive https://github.com/jgraph/drawio-desktop.git`
+Images are resized locally when needed and sent only with the request that includes them. The default limit is 10 MB, with the longest edge reduced to 2048 pixels before submission.
 
-To run this:
-1. `npm install` (in the root directory of this repo)
-2. [internal use only] export DRAWIO_ENV=dev if you want to develop/debug in dev mode.
-3. `npm start` _in the root directory of this repo_ runs the app. For debugging, use `npm start --enable-logging`.
+## Templates and iCloud
 
-Note: If a symlink is used to refer to drawio repo (instead of the submodule), then symlink the `node_modules` directory inside `drawio/src/main/webapp` also.
+The editable working template is stored as a hidden file managed by draw.ai. Importing or updating a template replaces that hidden working copy after confirmation. When the source template is stored in iCloud Drive, draw.ai records the source and checks whether it has changed before the template is used or managed; synchronization of the source file itself remains iCloud's responsibility.
 
-To fork the project, make your own changes and build an (unsigned) app for personal use, see [doc/BUILDING_FOR_PERSONAL_USE.md](doc/BUILDING_FOR_PERSONAL_USE.md).
+## Privacy
 
-To release:
-1. Update the draw.io sub-module and push the change. Add version tag before pushing to origin.
-2. Wait for the builds to complete (https://travis-ci.org/jgraph/drawio-desktop and https://ci.appveyor.com/project/davidjgraph/drawio-desktop)
-3. Go to https://github.com/jgraph/drawio-desktop/releases, edit the preview release.
-4. Download the windows exe and windows portable, sign them using `signtool sign /a /tr http://rfc3161timestamp.globalsign.com/advanced /td SHA256 c:/path/to/your/file.exe`
-5. Re-upload signed file as `draw.io-windows-installer-x.y.z.exe` and `draw.io-windows-no-installer-x.y.z.exe`
-6. Add release notes
-7. Publish release
+Workspace and diagram editing are local by default. AI requests are made only after the user configures a provider and submits a message. A request may contain the prompt, configured instructions, relevant diagram structure, and an attached image. Review the privacy and retention terms of the selected AI provider.
 
-*Note*: In Windows release, when using both x64 and is32 as arch, the result is one big file with both archs. This is why we split them.
+The application checks this GitHub repository for updates unless checks are disabled with `DRAWIO_DISABLE_UPDATE=true` or `--disable-update`. Diagrams can also load external media referenced by URL.
 
-Local Storage and Session Storage is stored in the AppData folder:
+## Development and packaging
 
-- macOS: `~/Library/Application Support/draw.io`
-- Windows: `C:\Users\<USER-NAME>\AppData\Roaming\draw.io\`
+Use `DRAWIO_ENV=dev npm start` to open renderer development tools. Before submitting a change, run:
 
-Not open-contribution
----------------------
+```bash
+npm test
+git diff --check
+git -C drawio diff --check
+```
 
-draw.io is closed to contributions (unless a maintainer permits it, which is extremely rare).
+Create an unsigned Apple Silicon macOS installer with:
 
-The level of complexity of this project means that even simple changes 
-can break a _lot_ of other moving parts. The amount of testing required 
-is far more than it first seems. If we were to receive a PR, we'd have 
-to basically throw it away and write it how we want it to be implemented.
+```bash
+DRAWIO_UNSIGNED=true CSC_IDENTITY_AUTO_DISCOVERY=false \
+  npx electron-builder --config electron-builder-linux-mac.json \
+  --mac dmg --arm64 --publish never
+```
 
-We are grateful for community involvement, bug reports, & feature requests. We do
-not wish to come off as anything but welcoming, however, we've
-made the decision to keep this project closed to contributions for 
-the long term viability of the project.
+Unsigned artifacts are intended for local testing. Public macOS releases should use a project-controlled Developer ID and Apple notarization.
+
+More information:
+
+- [Development guide](DEVELOPMENT.md)
+- [Local build guide](doc/BUILDING_FOR_PERSONAL_USE.md)
+- [Upstream maintenance](doc/UPSTREAM_MAINTENANCE.md)
+- [Release process](doc/RELEASE_PROCESS.md)
+- [Security policy](SECURITY.md)
+
+## Compatibility and license
+
+The application uses its own identifiers (`ai.draw.desktop`, `ai.draw.diagram`, and `draw-ai`) while retaining the `.drawio` extension and `application/vnd.jgraph.mxfile` MIME type for compatibility.
+
+Licensed under the Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

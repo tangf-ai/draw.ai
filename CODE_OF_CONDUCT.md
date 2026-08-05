@@ -35,7 +35,7 @@ Project maintainers have the right and responsibility to remove, edit, or reject
 
 ## Scope
 
-This Code of Conduct applies to all JGraph projects and the draw.io google groups.
+This Code of Conduct applies to the draw.ai project and its community spaces.
 
 Project maintainers are not subject to this code.
 

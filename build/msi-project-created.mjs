@@ -7,7 +7,7 @@
 // purged by cleanup tools. The generated project sets DISABLEADVTSHORTCUTS=1,
 // meaning the shortcuts are created as regular shortcuts targeting the
 // installed exe; removing the Icon attribute makes Explorer fall back to the
-// icon embedded in draw.io.exe instead. File association (ProgId) icons are
+// icon embedded in the draw.ai executable instead. File association (ProgId) icons are
 // left untouched as advertised extensions require the Icon table.
 import { readFile, writeFile } from 'fs/promises';
 

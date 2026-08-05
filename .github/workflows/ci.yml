@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Validate JavaScript and JSON
+        run: |
+          node --check src/main/electron.js
+          node --check src/main/workspace-window.js
+          node --check src/main/workspace-files.js
+          node --check src/main/ai-assistant.js
+          node --check src/main/user-data-migration.js
+          node --check drawio/src/main/webapp/plugins/ai-assistant.js
+          for file in package.json electron-builder-*.json; do jq -e . "$file" >/dev/null; done
+      - name: Run tests
+        run: npm test
+      - name: Check patches
+        run: |
+          git diff --check
+          git -C drawio diff --check

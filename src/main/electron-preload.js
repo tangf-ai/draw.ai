@@ -44,7 +44,15 @@ let fileChangedListeners = {};
 ipcRenderer.on('mainResp', (event, resp) => 
 {
 	var callbacks = reqInfo[resp.reqId];
-	
+
+	if (callbacks == null) return;
+
+	if (resp.progress)
+	{
+		if (typeof callbacks.progress === 'function') callbacks.progress(resp.data);
+		return;
+	}
+
 	if (resp.error)
 	{
 		callbacks.error(resp.msg, resp.e);
@@ -69,10 +77,10 @@ ipcRenderer.on('fileChanged', (event, resp) =>
 
 contextBridge.exposeInMainWorld(
     'electron', {
-        request: (msg, callback, error) => 
-		{
-			msg.reqId = reqId++;
-			reqInfo[msg.reqId] = {callback: callback, error: error};
+	        request: (msg, callback, error, progress) =>
+			{
+				msg.reqId = reqId++;
+				reqInfo[msg.reqId] = {callback: callback, error: error, progress: progress};
 
 			//TODO Maybe a special function for this better than this hack?
 			//File watch special case where the callback is called multiple times
