@@ -113,6 +113,7 @@ Draw.loadPlugin(function installAiAssistant(ui)
 	var attachedImage = null;
 	var imageLoadToken = 0;
 	var imageProcessing = false;
+	var memoryLoading = false;
 	var normalDockedWidth = ui.formatWidth > 0 ? ui.formatWidth : 240;
 	var normalWindowWidth = ui.formatWindow != null ?
 		(parseInt(ui.formatWindow.window.div.style.width, 10) || 240) : 240;
@@ -219,6 +220,7 @@ Draw.loadPlugin(function installAiAssistant(ui)
 		'.geAiQuestionEdit:disabled{opacity:.4;cursor:default}',
 		'.geAiMessageActions{display:flex;align-items:center;gap:8px;margin-top:8px}',
 		'.geAiButton.geAiRollbackButton{min-height:28px;padding:4px 9px}',
+		'.geAiMemoryUsed{margin-top:6px;color:light-dark(#5f6368,#bdc1c6);font-size:11px}',
 		'.geAiProgress{margin:0 0 12px;padding:10px;border:1px solid light-dark(#d8dce2,#4a4d52);border-radius:6px;background:light-dark(#fafbfc,#292a2e)}',
 		'.geAiProgressTitle{font-weight:600;margin-bottom:8px}',
 		'.geAiProgressStep{position:relative;padding:3px 0 3px 20px;color:light-dark(#5f6368,#bdc1c6);font-size:12px;line-height:1.45}',
@@ -272,6 +274,17 @@ Draw.loadPlugin(function installAiAssistant(ui)
 		'.geAiField input{height:34px}',
 		'.geAiField textarea{min-height:76px;resize:vertical}',
 		'.geAiSettingsActions{display:flex;justify-content:flex-end;gap:8px}',
+		'.geAiMemorySection{margin:4px 0 16px;padding-top:14px;border-top:1px solid light-dark(#e1e4e8,#3c4043)}',
+		'.geAiMemoryHeader{display:flex;align-items:center;gap:8px;margin-bottom:8px}',
+		'.geAiMemoryTitle{min-width:0;flex:1;font-weight:600;font-size:12px}',
+		'.geAiMemoryStatus{margin-bottom:8px;color:light-dark(#5f6368,#bdc1c6);font-size:11px;line-height:1.4}',
+		'.geAiMemoryList{display:flex;flex-direction:column;gap:6px}',
+		'.geAiMemoryItem{display:flex;align-items:flex-start;gap:6px;padding:7px 6px;border:1px solid light-dark(#e1e4e8,#45484d);border-radius:4px}',
+		'.geAiMemoryInfo{min-width:0;flex:1}',
+		'.geAiMemoryPrompt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}',
+		'.geAiMemoryMeta{margin-top:3px;color:light-dark(#80868b,#9aa0a6);font-size:10px}',
+		'.geAiMemoryDelete{width:26px;height:26px;min-width:26px;border:0;border-radius:4px;background:transparent;color:inherit;font-size:17px;cursor:pointer;padding:0}',
+		'.geAiMemoryDelete:hover{background:light-dark(#fce8e6,#442624);color:light-dark(#b3261e,#f28b82)}',
 		'.geAiConfigStatus{margin:0 0 14px;padding:8px;border-radius:4px;background:light-dark(#f1f3f4,#303134);font-size:12px;color:light-dark(#5f6368,#bdc1c6)}',
 		'.geAiConfigStatus.geAiConfigSuccess{background:light-dark(#e6f4ea,#203b2a);color:light-dark(#137333,#81c995)}',
 		'.geAiConfigStatus.geAiConfigError{background:light-dark(#fce8e6,#442624);color:light-dark(#b3261e,#f28b82)}',
@@ -399,6 +412,18 @@ Draw.loadPlugin(function installAiAssistant(ui)
 	optimizationFocusInput.setAttribute('maxlength', '4000');
 	optimizationFocusField.appendChild(optimizationFocusLabel);
 	optimizationFocusField.appendChild(optimizationFocusInput);
+	var memorySection = createElement('div', 'geAiMemorySection');
+	var memoryHeader = createElement('div', 'geAiMemoryHeader');
+	var memoryTitle = createElement('div', 'geAiMemoryTitle', '纠错记忆');
+	var refreshMemoriesButton = createButton('geAiIconBtn', '↻', '刷新纠错记忆');
+	refreshMemoriesButton.setAttribute('aria-label', '刷新纠错记忆');
+	memoryHeader.appendChild(memoryTitle);
+	memoryHeader.appendChild(refreshMemoriesButton);
+	var memoryStatus = createElement('div', 'geAiMemoryStatus', '记忆保存在统一工作区中');
+	var memoryList = createElement('div', 'geAiMemoryList');
+	memorySection.appendChild(memoryHeader);
+	memorySection.appendChild(memoryStatus);
+	memorySection.appendChild(memoryList);
 	var settingsActions = createElement('div', 'geAiSettingsActions');
 	var testConnectionButton = createButton('geAiButton', '测试连接');
 	var cancelSettingsButton = createButton('geAiButton', '返回');
@@ -413,6 +438,7 @@ Draw.loadPlugin(function installAiAssistant(ui)
 	settings.appendChild(customPromptField);
 	settings.appendChild(optimizationFocusField);
 	settings.appendChild(settingsActions);
+	settings.appendChild(memorySection);
 	aiView.appendChild(settings);
 	container.appendChild(aiView);
 
@@ -538,12 +564,13 @@ Draw.loadPlugin(function installAiAssistant(ui)
 		return true;
 	}
 
-	function snapshotDiagram()
+	function snapshotDiagram(forcePage)
 	{
 		var model = graph.getModel();
 		var selected = graph.getSelectionCells();
-		var scope = selected.length > 0 ? 'selection' : 'page';
-		var candidates = selected.length > 0 ? selected : model.getDescendants(model.getRoot());
+		var useSelection = forcePage !== true && selected.length > 0;
+		var scope = useSelection ? 'selection' : 'page';
+		var candidates = useSelection ? selected : model.getDescendants(model.getRoot());
 		var cells = [];
 		var styleKeys = ['fillColor', 'strokeColor', 'fontColor', 'rounded', 'dashed',
 			'shadow', 'fontStyle', 'shape', 'align', 'verticalAlign', 'endArrow',
@@ -719,16 +746,22 @@ Draw.loadPlugin(function installAiAssistant(ui)
 		var editIndex = undoManager.history.indexOf(lastAiChange.edit);
 		var canRollback = editIndex >= 0 &&
 			undoManager.indexOfNextAdd === editIndex + 1;
+		var historyRolledBack = editIndex >= undoManager.indexOfNextAdd && editIndex >= 0;
+		if (historyRolledBack) lastAiChange.wasRolledBack = true;
+		else if (canRollback) lastAiChange.wasRolledBack = false;
+		var rolledBack = lastAiChange.wasRolledBack === true;
 
 		if (canRollback)
 		{
 			lastAiChange.button.textContent = '↶ 回撤本次修改';
 			lastAiChange.button.title = '回撤本次 AI 修改';
 		}
-		else if (editIndex >= undoManager.indexOfNextAdd && editIndex >= 0)
+		else if (rolledBack)
 		{
 			lastAiChange.button.textContent = '已回撤';
 			lastAiChange.button.title = '本次 AI 修改已回撤';
+			lastAiChange.memoryButton.disabled = true;
+			lastAiChange.memoryButton.textContent = '已回撤，不能记忆';
 		}
 		else
 		{
@@ -737,6 +770,10 @@ Draw.loadPlugin(function installAiAssistant(ui)
 		}
 
 		lastAiChange.button.disabled = requestPending || !canRollback;
+		if (!rolledBack)
+		{
+			lastAiChange.memoryButton.disabled = requestPending || lastAiChange.remembered;
+		}
 		undoButton.disabled = requestPending || !canRollback;
 	}
 
@@ -759,23 +796,58 @@ Draw.loadPlugin(function installAiAssistant(ui)
 		updateContextLabel();
 	}
 
-	function addAppliedMessage(count, edit)
+	function rememberCorrection(change)
+	{
+		if (requestPending || change == null || change.remembered) return;
+		change.memoryButton.disabled = true;
+		change.memoryButton.textContent = '正在保存…';
+
+		request('aiSaveCorrection', {input: {
+			prompt: change.prompt,
+			pageName: change.afterAi.pageName,
+			beforeAi: change.beforeAi,
+			afterAi: change.afterAi,
+			corrected: snapshotDiagram(true)
+		}}).then(function(result)
+		{
+			change.remembered = true;
+			change.memoryButton.textContent = result.deduplicated ? '已更新记忆' : '已记住';
+			change.memoryButton.title = '本次人工纠错已保存到统一工作区';
+			addMessage('assistant', '已记住这次人工修改，后续遇到相关图形时会优先参考。');
+		}).catch(function(error)
+		{
+			change.memoryButton.disabled = false;
+			change.memoryButton.textContent = '记住这次修改';
+			addMessage('assistant', error.message, true);
+		});
+	}
+
+	function addAppliedMessage(count, edit, correctionContext)
 	{
 		if (lastAiChange != null)
 		{
 			lastAiChange.button.disabled = true;
 			lastAiChange.button.textContent = '已被后续修改替代';
 			lastAiChange.button.title = '仅支持直接回撤最近一次 AI 修改';
+			lastAiChange.memoryButton.disabled = true;
+			if (!lastAiChange.remembered) lastAiChange.memoryButton.textContent = '已被后续修改替代';
 		}
 
 		var message = addMessage('assistant', '已应用 ' + count + ' 项修改。');
 		var actions = createElement('div', 'geAiMessageActions');
 		var rollbackButton = createButton('geAiButton geAiRollbackButton',
 			'↶ 回撤本次修改', '回撤本次 AI 修改');
+		var memoryButton = createButton('geAiButton geAiRememberButton',
+			'记住这次修改', '手工调整图形后，保存这次纠错');
 		actions.appendChild(rollbackButton);
+		actions.appendChild(memoryButton);
 		message.appendChild(actions);
 		rollbackButton.addEventListener('click', rollbackLastAiChange);
-		lastAiChange = {edit: edit, button: rollbackButton};
+		lastAiChange = {edit: edit, button: rollbackButton, memoryButton: memoryButton,
+			prompt: correctionContext.prompt, beforeAi: correctionContext.beforeAi,
+			afterAi: correctionContext.afterAi, remembered: false, wasRolledBack: false};
+		var currentChange = lastAiChange;
+		memoryButton.addEventListener('click', function() { rememberCorrection(currentChange); });
 		updateRollbackState();
 		messages.scrollTop = messages.scrollHeight;
 	}
@@ -908,6 +980,28 @@ Draw.loadPlugin(function installAiAssistant(ui)
 		applyPlanButton.disabled = plan.operations.length === 0;
 		planPanel.classList.toggle('geAiHidden', plan.operations.length === 0);
 		messages.scrollTop = messages.scrollHeight;
+	}
+
+	function addResponseMetadata(message, plan)
+	{
+		var usedMemories = Array.isArray(plan.usedMemories) ? plan.usedMemories : [];
+		var qualityIssues = Array.isArray(plan.qualityIssues) ? plan.qualityIssues : [];
+
+		if (usedMemories.length > 0)
+		{
+			var memoryNote = createElement('div', 'geAiMemoryUsed',
+				'已参考 ' + usedMemories.length + ' 条纠错记忆');
+			memoryNote.title = usedMemories.map(function(memory) { return memory.prompt; }).join('\n');
+			message.appendChild(memoryNote);
+		}
+
+		if (qualityIssues.length > 0)
+		{
+			var qualityNote = createElement('div', 'geAiMemoryUsed',
+				'质量检查发现 ' + qualityIssues.length + ' 项潜在问题');
+			qualityNote.title = qualityIssues.map(function(issue) { return issue.type; }).join('、');
+			message.appendChild(qualityNote);
+		}
 	}
 
 	function formatImageSize(size)
@@ -1114,8 +1208,10 @@ Draw.loadPlugin(function installAiAssistant(ui)
 		applyPlanButton.disabled = pending || pendingPlan == null || pendingPlan.operations.length === 0;
 		cancelEditButton.disabled = pending;
 		var editButtons = messages.querySelectorAll('.geAiQuestionEdit');
+		var rememberButtons = messages.querySelectorAll('.geAiRememberButton');
 
 		for (var i = 0; i < editButtons.length; i++) editButtons[i].disabled = pending;
+		for (var j = 0; j < rememberButtons.length; j++) rememberButtons[j].disabled = pending;
 
 		if (pending)
 		{
@@ -1185,6 +1281,77 @@ Draw.loadPlugin(function installAiAssistant(ui)
 		});
 	}
 
+	function categoryLabel(category)
+	{
+		return {
+			labels: '文字', geometry: '位置/大小', styles: '样式',
+			structure: '节点', connections: '连线'
+		}[category] || category;
+	}
+
+	function renderMemories(items)
+	{
+		memoryList.textContent = '';
+		memoryTitle.textContent = '纠错记忆' + (items.length > 0 ? '（' + items.length + '）' : '');
+		memoryStatus.textContent = items.length > 0 ?
+			'仅在相关问题中参考，保存在 .drawio-workspace/assistant-memory.json' :
+			'暂无记忆。应用 AI 修改并手工调整后，可点击“记住这次修改”。';
+
+		for (var i = 0; i < items.length; i++)
+		{
+			(function(memory)
+			{
+				var item = createElement('div', 'geAiMemoryItem');
+				var info = createElement('div', 'geAiMemoryInfo');
+				var prompt = createElement('div', 'geAiMemoryPrompt', memory.prompt);
+				prompt.title = memory.prompt;
+				var categories = (memory.categories || []).map(categoryLabel).join('、');
+				var date = new Date(memory.updatedAt).toLocaleDateString();
+				var meta = createElement('div', 'geAiMemoryMeta',
+					(categories || '人工纠错') + ' · ' + memory.changeCount + ' 项 · ' + date);
+				var deleteButton = createButton('geAiMemoryDelete', '×', '删除这条纠错记忆');
+				deleteButton.setAttribute('aria-label', '删除这条纠错记忆');
+				deleteButton.addEventListener('click', function()
+				{
+					deleteButton.disabled = true;
+					request('aiDeleteMemory', {id: memory.id}).then(loadMemories).catch(function(error)
+					{
+						deleteButton.disabled = false;
+						memoryStatus.textContent = error.message;
+					});
+				});
+				info.appendChild(prompt);
+				info.appendChild(meta);
+				item.appendChild(info);
+				item.appendChild(deleteButton);
+				memoryList.appendChild(item);
+			})(items[i]);
+		}
+	}
+
+	function loadMemories()
+	{
+		if (memoryLoading) return Promise.resolve();
+		memoryLoading = true;
+		refreshMemoriesButton.disabled = true;
+		memoryStatus.textContent = '正在读取统一工作区中的纠错记忆…';
+
+		return request('aiListMemories').then(function(items)
+		{
+			renderMemories(Array.isArray(items) ? items : []);
+		}).catch(function(error)
+		{
+			memoryList.textContent = '';
+			memoryTitle.textContent = '纠错记忆';
+			memoryStatus.textContent = error.code === 'WORKSPACE_NOT_CONFIGURED' ?
+				'请先在工作区首页设置统一工作目录。' : error.message;
+		}).finally(function()
+		{
+			memoryLoading = false;
+			refreshMemoriesButton.disabled = false;
+		});
+	}
+
 	function showSettings(show)
 	{
 		conversation.classList.toggle('geAiHidden', show);
@@ -1205,6 +1372,7 @@ Draw.loadPlugin(function installAiAssistant(ui)
 				'已保存的 API Key 无法读取，请重新填写并保存。' :
 				(config != null && config.model ? '已配置：' + config.model : '未配置模型'),
 				apiKeyRecoveryRequired ? 'error' : undefined);
+			loadMemories();
 			window.setTimeout(function() { modelInput.focus(); }, 0);
 		}
 		else
@@ -1298,7 +1466,9 @@ Draw.loadPlugin(function installAiAssistant(ui)
 			if (attachedImage === imageForRequest) clearAttachment();
 			var assistantHistoryIndex = chatHistory.length;
 			chatHistory.push({role: 'assistant', content: plan.reply});
-			addMessage('assistant', plan.reply, false, assistantHistoryIndex);
+			var assistantMessage = addMessage('assistant', plan.reply, false, assistantHistoryIndex);
+			addResponseMetadata(assistantMessage, plan);
+			plan.sourcePrompt = prompt;
 			showPlan(plan);
 		}).catch(function(error)
 		{
@@ -1391,6 +1561,8 @@ Draw.loadPlugin(function installAiAssistant(ui)
 		if (pendingPlan == null || pendingPlan.operations.length === 0) return;
 
 		var model = graph.getModel();
+		var correctionPrompt = pendingPlan.sourcePrompt || 'AI 图形修改';
+		var beforeAiSnapshot = snapshotDiagram(true);
 		var undoManager = ui.editor.undoManager;
 		var previousTopEdit = undoManager.indexOfNextAdd > 0 ?
 			undoManager.history[undoManager.indexOfNextAdd - 1] : null;
@@ -1488,9 +1660,14 @@ Draw.loadPlugin(function installAiAssistant(ui)
 		var count = pendingPlan.operations.length;
 		var aiEdit = undoManager.indexOfNextAdd > 0 ?
 			undoManager.history[undoManager.indexOfNextAdd - 1] : null;
+		var afterAiSnapshot = snapshotDiagram(true);
 		pendingPlan = null;
 		planPanel.classList.add('geAiHidden');
-		addAppliedMessage(count, aiEdit !== previousTopEdit ? aiEdit : null);
+		addAppliedMessage(count, aiEdit !== previousTopEdit ? aiEdit : null, {
+			prompt: correctionPrompt,
+			beforeAi: beforeAiSnapshot,
+			afterAi: afterAiSnapshot
+		});
 		graph.setSelectionCells(Object.keys(refs).map(function(ref) { return refs[ref]; }));
 		graph.scrollCellToVisible(graph.getSelectionCell());
 		updateContextLabel();
@@ -1499,6 +1676,7 @@ Draw.loadPlugin(function installAiAssistant(ui)
 	formatTab.addEventListener('click', function() { showMode('format'); });
 	aiTab.addEventListener('click', function() { showMode('ai'); });
 	settingsButton.addEventListener('click', function() { showSettings(true); });
+	refreshMemoriesButton.addEventListener('click', loadMemories);
 	cancelSettingsButton.addEventListener('click', function() { showSettings(false); });
 	testConnectionButton.addEventListener('click', testConnection);
 	saveSettingsButton.addEventListener('click', saveSettings);
