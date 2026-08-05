@@ -505,6 +505,22 @@ Draw.loadPlugin(function installAiAssistant(ui)
 		return String(value).replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').replace(/\s+/g, ' ').trim().substring(0, 500);
 	}
 
+	function isSupportedAiStyleValue(key, value)
+	{
+		if (value.length > 80 || /[;=<>]/.test(value)) return false;
+		if (/Color$/.test(key)) return /^(#[0-9a-fA-F]{3,8}|none|transparent|default)$/.test(value);
+		if (key === 'rounded' || key === 'dashed' || key === 'shadow') return /^[01]$/.test(value);
+		if (key === 'fontStyle') return /^[0-7]$/.test(value);
+		if (key === 'shape') return /^(ellipse|rhombus|note|cloud|cylinder)$/.test(value);
+		if (key === 'align') return /^(left|center|right)$/.test(value);
+		if (key === 'verticalAlign') return /^(top|middle|bottom)$/.test(value);
+		if (key === 'endArrow') return /^(none|classic|block|open|oval|diamond)$/.test(value);
+		if (key === 'edgeStyle') return /^(none|orthogonalEdgeStyle|elbowEdgeStyle|entityRelationEdgeStyle)$/.test(value);
+		if (key === 'opacity') return /^\d+(?:\.\d+)?$/.test(value) && Number(value) <= 100;
+		if (key === 'strokeWidth') return /^\d+(?:\.\d+)?$/.test(value) && Number(value) <= 20;
+		return true;
+	}
+
 	function snapshotDiagram()
 	{
 		var model = graph.getModel();
@@ -528,7 +544,11 @@ Draw.loadPlugin(function installAiAssistant(ui)
 
 			for (var j = 0; j < styleKeys.length; j++)
 			{
-				if (style[styleKeys[j]] != null) itemStyle[styleKeys[j]] = String(style[styleKeys[j]]);
+				if (style[styleKeys[j]] != null)
+				{
+					var styleValue = String(style[styleKeys[j]]);
+					if (isSupportedAiStyleValue(styleKeys[j], styleValue)) itemStyle[styleKeys[j]] = styleValue;
+				}
 			}
 
 			var item = {
@@ -711,7 +731,7 @@ Draw.loadPlugin(function installAiAssistant(ui)
 		else if (stage === 'ready')
 		{
 			detailText = (progress.operationCount || 0) + ' 项修改';
-			if (progress.repairCount > 0) detailText += ' · 已修复 ' + progress.repairCount + ' 个临时引用';
+			if (progress.repairCount > 0) detailText += ' · 已修复 ' + progress.repairCount + ' 处 AI 输出';
 		}
 
 		if (detailText !== '') activeProgress.detail.textContent = detailText;
