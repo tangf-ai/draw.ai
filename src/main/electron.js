@@ -4031,6 +4031,7 @@ ipcMain.on("rendererReq", async (event, args) =>
 	}
 	catch (e)
 	{
-		event.reply('mainResp', {error: true, msg: e.message, e: e, reqId: args.reqId});
+		event.reply('mainResp', {error: true, msg: e.message,
+			code: typeof e.code === 'string' ? e.code : undefined, reqId: args.reqId});
 	}
 });

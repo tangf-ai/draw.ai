@@ -18,6 +18,19 @@ class MemoryStore
 	delete(key) { this.values.delete(key); }
 }
 
+function unavailableSafeStorage()
+{
+	return {
+		isEncryptionAvailable() { return true; },
+		encryptString(value) { return Buffer.from(value); },
+		decryptString(value)
+		{
+			if (value.toString() === 'replacement-key') return 'replacement-key';
+			throw new Error('Error while decrypting the ciphertext provided to safeStorage.decryptString.');
+		}
+	};
+}
+
 test('normalizes OpenAI-compatible endpoints', () =>
 {
 	assert.deepEqual(normalizeAiConfig({baseUrl: 'https://example.com/v1/', model: 'demo'}), {
@@ -157,6 +170,34 @@ test('tests the configured endpoint and returns selectable models without saving
 	assert.equal(sentRequest.requestUrl, 'https://example.com/v1/models');
 	assert.equal(sentRequest.request.headers.Authorization, 'Bearer temporary-secret');
 	assert.equal(service.getConfig().hasApiKey, false);
+});
+
+test('recovers from an API key encrypted by a different app identity', async () =>
+{
+	const store = new MemoryStore();
+	store.set('aiAssistant.config', {baseUrl: 'https://example.com/v1', model: 'demo'});
+	store.set('aiAssistant.apiKey', {type: 'safeStorage', value: 'c3RhbGUta2V5'});
+	let requestCount = 0;
+	const service = createAiAssistantService({
+		store,
+		safeStorage: unavailableSafeStorage(),
+		fetchImpl: async () => { requestCount++; throw new Error('must not fetch'); }
+	});
+
+	const config = service.getConfig();
+	assert.equal(config.hasApiKey, false);
+	assert.equal(config.apiKeyRecoveryRequired, true);
+	assert.equal(store.get('aiAssistant.apiKey'), undefined);
+
+	await assert.rejects(service.chat({
+		messages: [{role: 'user', content: '分析当前图'}],
+		context: {scope: 'page', cells: []}
+	}), /重新填写并保存 API Key/);
+	assert.equal(requestCount, 0);
+
+	const saved = service.saveConfig({baseUrl: 'https://example.com/v1', model: 'demo', apiKey: 'replacement-key'});
+	assert.equal(saved.hasApiKey, true);
+	assert.equal(saved.apiKeyRecoveryRequired, false);
 });
 
 test('sends a validated image as an OpenAI-compatible multimodal message', async () =>
@@ -307,6 +348,8 @@ test('keeps the AI tabs attached to floating Sketch and Minimal format windows',
 	assert.match(pluginSource, /测试连接/);
 	assert.match(pluginSource, /自定义提示词/);
 	assert.match(pluginSource, /重点优化内容/);
+	assert.match(pluginSource, /AI_API_KEY_RECOVERY_REQUIRED/);
+	assert.match(pluginSource, /旧密钥无法读取/);
 	assert.match(pluginSource, /request\('aiTestConfig'/);
 	assert.match(pluginSource, /graph\.setEnabled\(false\)/);
 	assert.match(pluginSource, /updateProgress/);

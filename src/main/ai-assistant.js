@@ -1,5 +1,8 @@
 const CONFIG_KEY = 'aiAssistant.config';
 const SECRET_KEY = 'aiAssistant.apiKey';
+const SECRET_RECOVERY_KEY = 'aiAssistant.apiKeyRecoveryRequired';
+const API_KEY_RECOVERY_CODE = 'AI_API_KEY_RECOVERY_REQUIRED';
+const API_KEY_RECOVERY_MESSAGE = '已保存的 API Key 无法在当前设备读取，请在 AI 设置中重新填写并保存 API Key。';
 const MAX_OPERATIONS = 80;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const ALLOWED_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
@@ -494,6 +497,42 @@ function validateImageAttachment(image)
 	return {mimeType, dataUrl};
 }
 
+function apiKeyRecoveryError()
+{
+	const error = new Error(API_KEY_RECOVERY_MESSAGE);
+	error.code = API_KEY_RECOVERY_CODE;
+	return error;
+}
+
+function markSecretForRecovery(store, removeSecret = false)
+{
+	if (store == null) return;
+
+	try
+	{
+		if (removeSecret) store.delete(SECRET_KEY);
+		store.set(SECRET_RECOVERY_KEY, true);
+	}
+	catch (e)
+	{
+		// Keep the original decryption failure actionable even if settings cannot
+		// be updated, rather than leaking a platform-specific safeStorage error.
+	}
+}
+
+function clearSecretRecovery(store)
+{
+	if (store == null) return;
+
+	try { store.delete(SECRET_RECOVERY_KEY); }
+	catch (e) {}
+}
+
+function isSecretRecoveryRequired(store)
+{
+	return store != null && store.get(SECRET_RECOVERY_KEY) === true;
+}
+
 function readSecret(store, safeStorage)
 {
 	if (store == null) return '';
@@ -505,12 +544,26 @@ function readSecret(store, safeStorage)
 	{
 		if (safeStorage == null || !safeStorage.isEncryptionAvailable())
 		{
-			throw new Error('The saved API key cannot be decrypted on this system');
+			markSecretForRecovery(store);
+			throw apiKeyRecoveryError();
 		}
 
-		return safeStorage.decryptString(Buffer.from(stored.value, 'base64'));
+		try
+		{
+			const value = safeStorage.decryptString(Buffer.from(stored.value, 'base64'));
+			clearSecretRecovery(store);
+			return value;
+		}
+		catch (e)
+		{
+			// A key encrypted under a prior app identity cannot be recovered after
+			// migration. Remove only this stale secret and ask the user to save it again.
+			markSecretForRecovery(store, true);
+			throw apiKeyRecoveryError();
+		}
 	}
 
+	clearSecretRecovery(store);
 	return stored.type === 'plain' ? stored.value : '';
 }
 
@@ -529,6 +582,8 @@ function writeSecret(store, safeStorage, value)
 	{
 		store.set(SECRET_KEY, {type: 'plain', value});
 	}
+
+	clearSecretRecovery(store);
 }
 
 function getStoredConfig(store)
@@ -775,10 +830,12 @@ export function createAiAssistantService({store, safeStorage, fetchImpl = global
 		{
 			const config = getStoredConfig(store);
 			let hasApiKey = false;
+			let apiKeyRecoveryRequired = isSecretRecoveryRequired(store);
 
-			try { hasApiKey = readSecret(store, safeStorage) !== ''; } catch (e) { hasApiKey = true; }
+			try { hasApiKey = readSecret(store, safeStorage) !== ''; }
+			catch (e) { apiKeyRecoveryRequired = e.code === API_KEY_RECOVERY_CODE; }
 
-			return {...config, hasApiKey};
+			return {...config, hasApiKey, apiKeyRecoveryRequired};
 		},
 
 		saveConfig(input)
@@ -791,13 +848,15 @@ export function createAiAssistantService({store, safeStorage, fetchImpl = global
 			if (input != null && input.clearApiKey === true)
 			{
 				store.delete(SECRET_KEY);
+				clearSecretRecovery(store);
 			}
 			else if (input != null && typeof input.apiKey === 'string' && input.apiKey.trim() !== '')
 			{
 				writeSecret(store, safeStorage, input.apiKey.trim());
 			}
 
-			return {...config, hasApiKey: readSecret(store, safeStorage) !== ''};
+			return {...config, hasApiKey: readSecret(store, safeStorage) !== '',
+				apiKeyRecoveryRequired: false};
 		},
 
 		async chat(input, onProgress)
@@ -806,6 +865,7 @@ export function createAiAssistantService({store, safeStorage, fetchImpl = global
 			const request = validateChatInput(input);
 			const config = getStoredConfig(store);
 			config.model = requiredString(config.model, 'model', 200);
+			if (isSecretRecoveryRequired(store)) throw apiKeyRecoveryError();
 			const apiKey = readSecret(store, safeStorage);
 			const headers = requestHeaders(apiKey, 'text/event-stream, application/json');
 			notifyProgress(onProgress, 'connecting', {
@@ -863,6 +923,7 @@ export function createAiAssistantService({store, safeStorage, fetchImpl = global
 			if (typeof fetchImpl !== 'function') throw new Error('Network requests are unavailable');
 			const config = normalizeAiConfig(input, getStoredConfig(store));
 			const suppliedKey = input != null && typeof input.apiKey === 'string' ? input.apiKey.trim() : '';
+			if (suppliedKey === '' && isSecretRecoveryRequired(store)) throw apiKeyRecoveryError();
 			const apiKey = suppliedKey !== '' ? suppliedKey : readSecret(store, safeStorage);
 			const startedAt = Date.now();
 			const response = await fetchImpl(buildModelsUrl(config.baseUrl), {

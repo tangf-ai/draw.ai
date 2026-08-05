@@ -55,7 +55,7 @@ ipcRenderer.on('mainResp', (event, resp) =>
 
 	if (resp.error)
 	{
-		callbacks.error(resp.msg, resp.e);
+		callbacks.error(resp.msg, {code: resp.code});
 	}
 	else
 	{
