@@ -12,6 +12,11 @@
   <a href="README.zh-CN.md">简体中文</a> · English
 </p>
 
+<p align="center">
+  <a href="https://github.com/tangf-ai/draw.ai/actions/workflows/ci.yml"><img src="https://github.com/tangf-ai/draw.ai/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI status"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="Apache License 2.0"></a>
+</p>
+
 draw.ai brings a unified file workspace, reusable templates, image-aware AI assistance, and the mature draw.io editor into one open-source desktop application. Diagrams remain standard, editable `.drawio` files.
 
 > draw.ai is an independent community project based on the Apache-2.0-licensed draw.io projects. It is not affiliated with, endorsed by, or supported by draw.io Ltd or JGraph. draw.io is a trademark of its respective owner.

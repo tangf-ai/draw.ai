@@ -12,6 +12,11 @@
   简体中文 · <a href="README.md">English</a>
 </p>
 
+<p align="center">
+  <a href="https://github.com/tangf-ai/draw.ai/actions/workflows/ci.yml"><img src="https://github.com/tangf-ai/draw.ai/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI 状态"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="Apache License 2.0"></a>
+</p>
+
 draw.ai 把统一文件工作区、可复用模板、支持图片理解的 AI 助手和成熟的 draw.io 编辑器整合到一个开源桌面应用中。创建的图仍然是标准、可编辑的 `.drawio` 文件。
 
 > draw.ai 是基于 Apache-2.0 许可证 draw.io 项目的独立社区项目，与 draw.io Ltd 或 JGraph 没有关联，也未获得其认可或支持。draw.io 是其权利人的商标。
