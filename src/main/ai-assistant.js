@@ -571,6 +571,15 @@ function isSecretRecoveryRequired(store)
 	return store != null && store.get(SECRET_RECOVERY_KEY) === true;
 }
 
+function hasStoredSecret(store)
+{
+	if (store == null) return false;
+	const stored = store.get(SECRET_KEY);
+
+	return stored != null && typeof stored === 'object' && typeof stored.value === 'string' &&
+		stored.value !== '' && (stored.type === 'safeStorage' || stored.type === 'plain');
+}
+
 function readSecret(store, safeStorage)
 {
 	if (store == null) return '';
@@ -869,13 +878,12 @@ export function createAiAssistantService({store, safeStorage, fetchImpl = global
 		getConfig()
 		{
 			const config = getStoredConfig(store);
-			let hasApiKey = false;
-			let apiKeyRecoveryRequired = isSecretRecoveryRequired(store);
+			const apiKeyRecoveryRequired = isSecretRecoveryRequired(store);
 
-			try { hasApiKey = readSecret(store, safeStorage) !== ''; }
-			catch (e) { apiKeyRecoveryRequired = e.code === API_KEY_RECOVERY_CODE; }
-
-			return {...config, hasApiKey, apiKeyRecoveryRequired};
+			// Loading the assistant at startup must not trigger a macOS Keychain
+			// authorization dialog. The secret is decrypted only for a user action.
+			return {...config, hasApiKey: !apiKeyRecoveryRequired && hasStoredSecret(store),
+				apiKeyRecoveryRequired};
 		},
 
 		saveConfig(input)
@@ -895,7 +903,7 @@ export function createAiAssistantService({store, safeStorage, fetchImpl = global
 				writeSecret(store, safeStorage, input.apiKey.trim());
 			}
 
-			return {...config, hasApiKey: readSecret(store, safeStorage) !== '',
+			return {...config, hasApiKey: hasStoredSecret(store),
 				apiKeyRecoveryRequired: false};
 		},
 

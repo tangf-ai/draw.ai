@@ -18,13 +18,14 @@ class MemoryStore
 	delete(key) { this.values.delete(key); }
 }
 
-function unavailableSafeStorage()
+function unavailableSafeStorage(onDecrypt)
 {
 	return {
 		isEncryptionAvailable() { return true; },
 		encryptString(value) { return Buffer.from(value); },
 		decryptString(value)
 		{
+			if (typeof onDecrypt === 'function') onDecrypt();
 			if (value.toString() === 'replacement-key') return 'replacement-key';
 			throw new Error('Error while decrypting the ciphertext provided to safeStorage.decryptString.');
 		}
@@ -187,28 +188,33 @@ test('tests the configured endpoint and returns selectable models without saving
 	assert.equal(service.getConfig().hasApiKey, false);
 });
 
-test('recovers from an API key encrypted by a different app identity', async () =>
+test('defers encrypted API key access until it is needed and recovers stale keys', async () =>
 {
 	const store = new MemoryStore();
 	store.set('aiAssistant.config', {baseUrl: 'https://example.com/v1', model: 'demo'});
 	store.set('aiAssistant.apiKey', {type: 'safeStorage', value: 'c3RhbGUta2V5'});
 	let requestCount = 0;
+	let decryptCount = 0;
 	const service = createAiAssistantService({
 		store,
-		safeStorage: unavailableSafeStorage(),
+		safeStorage: unavailableSafeStorage(() => { decryptCount++; }),
 		fetchImpl: async () => { requestCount++; throw new Error('must not fetch'); }
 	});
 
 	const config = service.getConfig();
-	assert.equal(config.hasApiKey, false);
-	assert.equal(config.apiKeyRecoveryRequired, true);
-	assert.equal(store.get('aiAssistant.apiKey'), undefined);
+	assert.equal(config.hasApiKey, true);
+	assert.equal(config.apiKeyRecoveryRequired, false);
+	assert.equal(decryptCount, 0);
 
 	await assert.rejects(service.chat({
 		messages: [{role: 'user', content: '分析当前图'}],
 		context: {scope: 'page', cells: []}
 	}), /重新填写并保存 API Key/);
 	assert.equal(requestCount, 0);
+	assert.equal(decryptCount, 1);
+	assert.equal(store.get('aiAssistant.apiKey'), undefined);
+	assert.equal(service.getConfig().hasApiKey, false);
+	assert.equal(service.getConfig().apiKeyRecoveryRequired, true);
 
 	const saved = service.saveConfig({baseUrl: 'https://example.com/v1', model: 'demo', apiKey: 'replacement-key'});
 	assert.equal(saved.hasApiKey, true);
