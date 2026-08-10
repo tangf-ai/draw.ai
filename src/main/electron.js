@@ -2,7 +2,7 @@ import fs from 'fs';
 import { promises as fsProm } from 'fs';
 import path from 'path';
 import url from 'url';
-import {Menu as menu, shell, dialog, session, screen, safeStorage,
+import {Menu as menu, shell, dialog, session, screen,
 	clipboard, nativeImage, ipcMain, app, BrowserWindow} from 'electron';
 import crc from 'crc';
 import zlib from 'zlib';
@@ -18,11 +18,11 @@ import contextMenu from 'electron-context-menu';
 import {spawn, exec} from 'child_process';
 import {disableUpdate as disUpPkg} from './disableUpdate.js';
 import {createWorkspaceController, workspaceCodeUrl} from './workspace-window.js';
-import {createAiAssistantService} from './ai-assistant.js';
+import {createWorkspaceAgentService, readWorkspaceAgentCodexProfile} from './workspace-agent.js';
 import {migrateLegacyUserData} from './user-data-migration.js';
 
 let store;
-let aiAssistantService;
+let workspaceAgentService;
 
 try
 {
@@ -48,8 +48,12 @@ catch (e)
 	store = null;
 }
 
-aiAssistantService = createAiAssistantService({store, safeStorage,
-	getWorkspaceRoot: () => store?.get('workspaceRoot')});
+workspaceAgentService = createWorkspaceAgentService({
+	store,
+	getWorkspaceRoot: () => store?.get('workspaceRoot'),
+	getCodexProfile: () => readWorkspaceAgentCodexProfile(store),
+	stateDir: path.join(app.getPath('userData'), 'workspace-agent')
+});
 
 // One-shot migration: detect whether this is a fresh install or an update,
 // so we can seed the drawio Configuration's defaultAdaptiveColors accordingly.
@@ -1380,6 +1384,8 @@ app.whenReady().then(() =>
 		shell: shell,
 		store: store,
 		isDev: __DEV__,
+		isEditorSender: validateSender,
+		authorizePath: blessPath,
 		onWorkspaceReady: () =>
 		{
 			firstWinLoaded = true;
@@ -1853,7 +1859,11 @@ app.on('web-contents-created', (event, contents) => {
 	})
 })
 
-app.on('before-quit', () => workspaceController?.stop());
+app.on('before-quit', () =>
+{
+	workspaceController?.stop();
+	workspaceAgentService?.stop();
+});
 
 autoUpdater.on('error', e => notifyUpdateFailure(e, 'autoUpdater error event'))
 
@@ -3965,29 +3975,31 @@ ipcMain.on("rendererReq", async (event, args) =>
 			// message in the Plugins dialog instead of failing
 			ret = false;
 			break;
-		case 'aiGetConfig':
-			ret = aiAssistantService.getConfig();
+		case 'workspaceAgentGetState':
+			ret = await workspaceAgentService.getState();
 			break;
-		case 'aiSaveConfig':
-			ret = aiAssistantService.saveConfig(args.config);
-			break;
-		case 'aiTestConfig':
-			ret = await aiAssistantService.testConfig(args.config);
-			break;
-		case 'aiChat':
-			ret = await aiAssistantService.chat(args.input, progress =>
+		case 'workspaceAgentChat':
+			ret = await workspaceAgentService.chat(args.input, progress =>
 			{
 				event.reply('mainResp', {progress: true, data: progress, reqId: args.reqId});
 			});
+			if (ret?.changes?.length > 0) workspaceController?.notifyChanged();
 			break;
-		case 'aiListMemories':
-			ret = await aiAssistantService.listMemories();
+		case 'workspaceAgentApprove':
+			ret = await workspaceAgentService.approve(args.input);
 			break;
-		case 'aiSaveCorrection':
-			ret = await aiAssistantService.saveCorrection(args.input);
+		case 'workspaceAgentSteer':
+			ret = await workspaceAgentService.steer(args.text);
 			break;
-		case 'aiDeleteMemory':
-			ret = await aiAssistantService.deleteMemory(args.id);
+		case 'workspaceAgentInterrupt':
+			ret = await workspaceAgentService.interrupt();
+			break;
+		case 'workspaceAgentNewThread':
+			ret = await workspaceAgentService.newThread();
+			break;
+		case 'workspaceAgentRollback':
+			ret = await workspaceAgentService.rollback();
+			if (ret?.changes?.length > 0) workspaceController?.notifyChanged();
 			break;
 		case 'dirname':
 			reqStr(args.path, 'path');

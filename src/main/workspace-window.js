@@ -57,6 +57,8 @@ export function createWorkspaceController(dependencies)
 		openDiagram,
 		registerWindow,
 		onWorkspaceReady,
+		isEditorSender,
+		authorizePath,
 		isDev
 	} = dependencies;
 
@@ -68,6 +70,12 @@ export function createWorkspaceController(dependencies)
 	{
 		if (frame == null) return false;
 		return frame.url.replace(/\/.\:\//, value => value.toUpperCase()).startsWith(workspaceCodeUrl);
+	}
+
+	function isAllowedSender(frame)
+	{
+		return isWorkspaceSender(frame) ||
+			(typeof isEditorSender === 'function' && isEditorSender(frame));
 	}
 
 	async function getState(options = {})
@@ -96,9 +104,15 @@ export function createWorkspaceController(dependencies)
 
 	function notifyChanged()
 	{
-		if (workspaceWindow != null && !workspaceWindow.isDestroyed())
+		const windows = typeof BrowserWindow.getAllWindows === 'function' ?
+			BrowserWindow.getAllWindows() : (workspaceWindow != null ? [workspaceWindow] : []);
+
+		for (const window of windows)
 		{
-			workspaceWindow.webContents.send('workspace:changed');
+			if (window != null && !window.isDestroyed())
+			{
+				window.webContents.send('workspace:changed');
+			}
 		}
 	}
 
@@ -143,6 +157,7 @@ export function createWorkspaceController(dependencies)
 		const state = await readWorkspace(root);
 		store?.set(WORKSPACE_ROOT_KEY, state.root);
 		startWatcher(state.root);
+		notifyChanged();
 		return state;
 	}
 
@@ -162,7 +177,7 @@ export function createWorkspaceController(dependencies)
 	{
 		ipcMain.handle(channel, async (event, ...args) =>
 		{
-			if (!isWorkspaceSender(event.senderFrame))
+			if (!isAllowedSender(event.senderFrame))
 			{
 				return {ok: false, error: '请求来源无效', code: 'INVALID_SENDER'};
 			}
@@ -250,6 +265,26 @@ export function createWorkspaceController(dependencies)
 		}
 
 		openDiagram(item.absolutePath);
+		return true;
+	});
+
+	handle('workspace:resolve-item', async (event, relativePath) =>
+	{
+		const root = store?.get(WORKSPACE_ROOT_KEY);
+		const item = await getWorkspaceItem(root, relativePath);
+
+		if (item.type !== 'file' || !WORKSPACE_FILE_EXTENSIONS.has(path.extname(item.absolutePath).toLowerCase()))
+		{
+			throw new Error('只能打开工作区中的图文件');
+		}
+
+		authorizePath?.(item.absolutePath);
+		return {absolutePath: item.absolutePath, relativePath: item.relativePath, name: item.name};
+	});
+
+	handle('workspace:show-manager', () =>
+	{
+		createWindow();
 		return true;
 	});
 
@@ -381,6 +416,7 @@ export function createWorkspaceController(dependencies)
 	return {
 		createWindow: createWindow,
 		isWorkspaceSender: isWorkspaceSender,
+		notifyChanged: notifyChanged,
 		stop: stopWatcher
 	};
 }

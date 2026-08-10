@@ -117,5 +117,37 @@ contextBridge.exposeInMainWorld(
     'process', {
 		type: process.type,
 		versions: process.versions
-	}
+    }
 );
+
+async function invokeWorkspace(channel, ...args)
+{
+	const result = await ipcRenderer.invoke(channel, ...args);
+
+	if (!result?.ok)
+	{
+		const error = new Error(result?.error || '操作失败');
+		error.code = result?.code;
+		throw error;
+	}
+
+	return result.data;
+}
+
+contextBridge.exposeInMainWorld('workspaceAPI', {
+	getState: () => invokeWorkspace('workspace:get-state'),
+	chooseRoot: () => invokeWorkspace('workspace:choose-root'),
+	useDefaultRoot: () => invokeWorkspace('workspace:use-default-root'),
+	createDirectory: (parentRelativePath, name) =>
+		invokeWorkspace('workspace:create-directory', parentRelativePath, name),
+	createDiagram: (parentRelativePath, name) =>
+		invokeWorkspace('workspace:create-diagram', parentRelativePath, name),
+	resolveItem: relativePath => invokeWorkspace('workspace:resolve-item', relativePath),
+	showManager: () => invokeWorkspace('workspace:show-manager'),
+	onChanged: callback =>
+	{
+		const listener = () => callback();
+		ipcRenderer.on('workspace:changed', listener);
+		return () => ipcRenderer.removeListener('workspace:changed', listener);
+	}
+});
