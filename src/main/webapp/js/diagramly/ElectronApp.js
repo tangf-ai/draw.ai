@@ -207,24 +207,31 @@ mxStencilRegistry.allowEval = false;
 		}
 	}
 
-	var aiAssistantPluginUrl = './plugins/ai-assistant.js';
+	var workspaceAgentPluginUrl = './plugins/workspace-agent.js';
+	var workspaceExplorerPluginUrl = './plugins/workspace-explorer.js';
 
-	function loadAiAssistant()
+	function loadBuiltInPlugin(pluginUrl)
 	{
 		App.initPluginCallback();
 
-		if (!App.pluginsLoaded[aiAssistantPluginUrl])
+		if (!App.pluginsLoaded[pluginUrl])
 		{
-			App.pluginsLoaded[aiAssistantPluginUrl] = true;
+			App.pluginsLoaded[pluginUrl] = true;
 			App.embedModePluginsCount++;
-			mxscript(aiAssistantPluginUrl);
+			mxscript(pluginUrl);
 		}
 	}
 
+	function loadWorkspaceAgent()
+	{
+		loadBuiltInPlugin(workspaceAgentPluginUrl);
+	}
+
 	// Production bootstrap may call App.main before ElectronApp.js finishes
-	// loading. Register the built-in assistant immediately so it also works in
+	// loading. Register the built-in Agent immediately so it also works in
 	// fast-starting themes such as Minimal.
-	loadAiAssistant();
+	loadBuiltInPlugin(workspaceExplorerPluginUrl);
+	loadWorkspaceAgent();
 
 	var origAppMain = App.main;
 	
@@ -241,9 +248,10 @@ mxStencilRegistry.allowEval = false;
 
 		//Load desktop plugins
 		var plugins = (mxSettings.settings != null) ? mxSettings.getPlugins() : null;
-		// The AI assistant is shipped with the desktop application and is loaded
+		// The workspace Agent is shipped with the desktop application and is loaded
 		// directly here. URL and user-configured external plugins remain disabled.
-		loadAiAssistant();
+		loadBuiltInPlugin(workspaceExplorerPluginUrl);
+		loadWorkspaceAgent();
 
 		if (plugins != null && plugins.length > 0)
 		{
@@ -276,7 +284,8 @@ mxStencilRegistry.allowEval = false;
 							pluginUrl = './' + pluginUrl;
 						}
 
-						if (pluginUrl == aiAssistantPluginUrl)
+						if (pluginUrl == workspaceAgentPluginUrl ||
+							pluginUrl == './plugins/ai-assistant.js')
 						{
 							continue;
 						}
@@ -1067,6 +1076,86 @@ mxStencilRegistry.allowEval = false;
 
 			await requestSync({action: 'unwatchFile', path: path});
 		};
+	};
+
+	// Reloads a file after an approved external editor has changed it. Unlike the
+	// generic synchronize flow, there are no local patches to preserve because
+	// callers save and lock the editor before handing the file off.
+	EditorUi.prototype.reloadExternalFile = function(success, error)
+	{
+		var file = this.getCurrentFile();
+
+		if (file == null)
+		{
+			if (success != null) success();
+			return;
+		}
+
+		if (file.savingFile)
+		{
+			if (error != null) error({message: mxResources.get('busy')});
+			return;
+		}
+
+		var graph = this.editor.graph;
+		var selection = graph.getSelectionCells();
+		var viewState = graph.getViewState();
+		var page = this.currentPage;
+		var spinning = this.spinner.spin(document.body, mxResources.get('updatingDocument'));
+		file.clearAutosave();
+		this.clearStatus();
+
+		var fail = mxUtils.bind(this, function(err)
+		{
+			if (spinning) this.spinner.stop();
+			file.handleFileError(err, true);
+
+			if (error != null)
+			{
+				error(err);
+			}
+		});
+
+		file.getLatestVersion(mxUtils.bind(this, function(latestFile)
+		{
+			try
+			{
+				if (latestFile == null || latestFile.getData() == null)
+				{
+					throw new Error(mxResources.get('fileNotFound'));
+				}
+
+				var latestData = latestFile.getData();
+				file.stats.fileReloaded++;
+
+				// The Agent edits the saved file directly, so the disk version is
+				// authoritative. Passing no patches prevents stale canvas state from
+				// being reapplied over the Agent's changes.
+				this.replaceFileData(latestData, null);
+				this.restoreViewState(page, viewState, selection);
+				file.setData(latestData);
+				file.initialData = latestData;
+				file.setShadowPages(latestFile.getShadowPages(),
+					latestFile.getShadowVars());
+				file.setDescriptor(latestFile.getDescriptor());
+				file.setModified(false);
+				file.clearAutosave();
+				file.descriptorChanged();
+				file.contentChanged();
+
+				if (spinning) this.spinner.stop();
+				file.handleFileSuccess(true);
+
+				if (success != null)
+				{
+					success();
+				}
+			}
+			catch (err)
+			{
+				fail(err);
+			}
+		}), fail);
 	};
 
 	// Watches the path for changes

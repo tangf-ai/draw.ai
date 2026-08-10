@@ -351,15 +351,15 @@ else
                     brandStyle.textContent = '.geAppIcon{background-color:#15262d;}';
                     document.head.appendChild(brandStyle);
 
-                    // Register the bundled assistant before App.main. Starting
-                    // the app sooner can leave Draw.loadPlugin pointing at an
-                    // already-created UI and the assistant tab never appears.
-                    var aiAssistantPluginUrl = './plugins/ai-assistant.js';
-                    App.initPluginCallback();
-                    App.pluginsLoaded[aiAssistantPluginUrl] = true;
-                    App.embedModePluginsCount++;
+                    // Register the bundled workspace Agent before App.main. Starting
+					// the app sooner can leave Draw.loadPlugin pointing at an
+					// already-created UI and the Agent tab never appears.
+					var workspaceAgentPluginUrl = './plugins/workspace-agent.js';
+					App.initPluginCallback();
+					App.pluginsLoaded[workspaceAgentPluginUrl] = true;
+					App.embedModePluginsCount++;
 
-                    mxscript(aiAssistantPluginUrl, function()
+					mxscript(workspaceAgentPluginUrl, function()
                     {
                         mxscript('js/diagramly/DesktopLibrary.js', function()
                         {
