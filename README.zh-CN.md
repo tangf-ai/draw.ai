@@ -21,6 +21,12 @@ draw.ai 把统一文件工作区、可复用模板、基于 Codex 的图形 Agen
 
 > draw.ai 是基于 Apache-2.0 许可证 draw.io 项目的独立社区项目，与 draw.io Ltd 或 JGraph 没有关联，也未获得其认可或支持。draw.io 是其权利人的商标。
 
+<p align="center">
+  <img src="docs/images/editor-workspace.png" width="100%" alt="draw.ai 编辑器、统一工作区与示例架构图">
+</p>
+
+<p align="center"><sub>在同一桌面窗口中管理图文件并使用完整的 draw.io 编辑器。</sub></p>
+
 ## 核心功能
 
 - **统一工作区**：在一个窗口中创建目录和图文件，并完成搜索、导入、重命名、复制、移动、在访达中显示和移到系统废纸篓等操作。
@@ -31,6 +37,22 @@ draw.ai 把统一文件工作区、可复用模板、基于 Codex 的图形 Agen
 - **持续对话**：Codex 执行期间可以继续补充要求，也可以停止当前任务，或为工作区开始一个新对话。
 - **检查点撤回**：每轮 Agent 执行前自动备份工作区图纸；无效修改会自动恢复，成功修改也可由用户撤回。
 - **跨平台构建**：包含 macOS、Windows 和 Linux 的打包配置。
+
+## 界面预览
+
+以下截图均使用虚构演示数据，不包含真实工作区、账号、对话或业务信息。
+
+### 统一工作区
+
+集中创建和整理目录、标准 `.drawio` 文件与默认模板，无需在不同位置查找图纸。
+
+![draw.ai 统一图纸工作区](docs/images/workspace-overview.png)
+
+### 工作区 Agent
+
+在图形编辑器旁提交修改要求、限定 Page 或选区范围、查看文件变更，并在需要时撤回最近一次修改。
+
+![draw.ai 工作区 Agent](docs/images/workspace-agent.png)
 
 ## 快速开始
 

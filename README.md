@@ -21,6 +21,12 @@ draw.ai brings a unified file workspace, reusable templates, a Codex-powered dia
 
 > draw.ai is an independent community project based on the Apache-2.0-licensed draw.io projects. It is not affiliated with, endorsed by, or supported by draw.io Ltd or JGraph. draw.io is a trademark of its respective owner.
 
+<p align="center">
+  <img src="docs/images/editor-workspace.png" width="100%" alt="draw.ai editor with the unified workspace and a sample architecture diagram">
+</p>
+
+<p align="center"><sub>Manage diagram files and use the full draw.io editor in one desktop window.</sub></p>
+
 ## Features
 
 - **Unified workspace**: create folders and diagrams, search, import, rename, duplicate, move, reveal, and move files to the system trash from one window.
@@ -31,6 +37,22 @@ draw.ai brings a unified file workspace, reusable templates, a Codex-powered dia
 - **Persistent conversations**: continue a task with follow-up instructions while Codex is working, stop the current run, or start a fresh conversation for the workspace.
 - **Checkpoint rollback**: draw.ai snapshots workspace diagrams before each Agent run, restores invalid edits automatically, and lets you roll back the latest successful change.
 - **Cross-platform packaging**: macOS, Windows, and Linux build configurations are included.
+
+## Interface preview
+
+All screenshots use fictional demo data and contain no real workspace, account, conversation, or business information.
+
+### Unified workspace
+
+Create and organize folders, standard `.drawio` files, and the default template without searching across separate locations.
+
+![draw.ai unified diagram workspace](docs/images/workspace-overview.png)
+
+### Workspace Agent
+
+Submit editing requests beside the diagram, target a Page or selection, review changed files, and roll back the latest change when needed.
+
+![draw.ai Workspace Agent](docs/images/workspace-agent.png)
 
 ## Quick start
 
