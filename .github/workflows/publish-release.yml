@@ -64,9 +64,17 @@ jobs:
             name="$(basename "$asset")"
 
             case "$name" in
-              *-"$version".dmg|*-"$version".zip|*-"$version".exe|*-"$version".msi|*-"$version".AppImage|*-"$version".deb|*-"$version".rpm) ;;
+              *.dmg|*.zip|*.exe|*.msi|*.AppImage|*.deb|*.rpm) ;;
               *)
                 echo "Unexpected release asset: $name" >&2
+                exit 1
+                ;;
+            esac
+
+            case "$name" in
+              *-"$version"*) ;;
+              *)
+                echo "Asset does not contain release version $version: $name" >&2
                 exit 1
                 ;;
             esac
