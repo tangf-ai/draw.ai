@@ -1,0 +1,82 @@
+name: Publish draw.ai Release Assets
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing draft release tag'
+        required: true
+        type: string
+      macos_run_id:
+        description: 'Successful macOS build run ID'
+        required: true
+        type: string
+      windows_run_id:
+        description: 'Successful Windows build run ID'
+        required: true
+        type: string
+      linux_run_id:
+        description: 'Successful Linux build run ID'
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v6
+        with:
+          name: draw-ai-macos-unsigned
+          path: release-assets/macos
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.macos_run_id }}
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v6
+        with:
+          name: draw-ai-windows-unsigned
+          path: release-assets/windows
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.windows_run_id }}
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v6
+        with:
+          name: draw-ai-linux-unsigned
+          path: release-assets/linux
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.linux_run_id }}
+      - name: Validate release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          mapfile -t assets < <(find release-assets -type f | sort)
+          test "${#assets[@]}" -gt 0
+
+          for asset in "${assets[@]}"; do
+            name="$(basename "$asset")"
+
+            case "$name" in
+              *-"$version".dmg|*-"$version".zip|*-"$version".exe|*-"$version".msi|*-"$version".AppImage|*-"$version".deb|*-"$version".rpm) ;;
+              *)
+                echo "Unexpected release asset: $name" >&2
+                exit 1
+                ;;
+            esac
+          done
+
+          printf '%s\n' "${assets[@]}"
+      - name: Upload assets to draft release
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' | grep -qx true
+          mapfile -t assets < <(find release-assets -type f | sort)
+          gh release upload "$RELEASE_TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
