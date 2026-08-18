@@ -13,6 +13,7 @@ Draw.loadPlugin(function(ui)
 	var currentDirectory = '';
 	var searchQuery = '';
 	var expanded = {};
+	var draggedRelativePath = null;
 	var graphModelListener = null;
 	var removeWorkspaceChangedListener = null;
 
@@ -66,6 +67,12 @@ Draw.loadPlugin(function(ui)
 		'.geWorkspaceTree{min-height:0;flex:1;overflow:auto;padding:0 6px 8px}',
 		'.geWorkspaceRow{display:flex;align-items:center;width:100%;height:30px;gap:5px;padding:0 7px;border:0;border-radius:4px;background:transparent;color:inherit;font:12px Arial,sans-serif;text-align:left;cursor:pointer;box-sizing:border-box;letter-spacing:0}',
 		'.geWorkspaceRow:hover{background:light-dark(#f1f3f4,#303134)}',
+		'.geWorkspaceRow[draggable="true"]{cursor:grab}',
+		'.geWorkspaceRow[draggable="true"]:active{cursor:grabbing}',
+		'.geWorkspaceRow.geWorkspaceDragging{opacity:.45}',
+		'.geWorkspaceRow.geWorkspaceDropTarget{background:light-dark(#e8f0fe,#26354d);box-shadow:inset 0 0 0 1px #1a73e8}',
+		'.geWorkspaceIdentity.geWorkspaceDropTarget{border-radius:4px;box-shadow:inset 0 0 0 1px #1a73e8;background:light-dark(#e8f0fe,#26354d)}',
+		'.geWorkspaceTree.geWorkspaceDropTarget{background:light-dark(#f4f8ff,#252b35);box-shadow:inset 0 0 0 2px #1a73e8}',
 		'.geWorkspaceRow.geWorkspaceCurrent{background:light-dark(#e8f0fe,#26354d);color:light-dark(#174ea6,#8ab4f8);font-weight:600}',
 		'.geWorkspaceRow.geWorkspaceSelected{background:light-dark(#fef3e2,#413323)}',
 		'.geWorkspaceRow .geWorkspaceFolder{color:light-dark(#c77c18,#f0b45b)}',
@@ -175,6 +182,101 @@ Draw.loadPlugin(function(ui)
 		return item.type === 'directory' && item.children.some(matchesSearch);
 	}
 
+	function parentPath(relativePath)
+	{
+		var index = relativePath.lastIndexOf('/');
+		return index < 0 ? '' : relativePath.substring(0, index);
+	}
+
+	function canDropIn(destinationRelativePath)
+	{
+		return draggedRelativePath != null &&
+			normalizedPath(parentPath(draggedRelativePath)) !== normalizedPath(destinationRelativePath);
+	}
+
+	function clearDropTargets()
+	{
+		var targets = workspaceView.querySelectorAll('.geWorkspaceDropTarget');
+
+		for (var i = 0; i < targets.length; i++)
+		{
+			targets[i].classList.remove('geWorkspaceDropTarget');
+		}
+	}
+
+	function clearDragFeedback()
+	{
+		clearDropTargets();
+		var sources = workspaceView.querySelectorAll('.geWorkspaceDragging');
+
+		for (var i = 0; i < sources.length; i++)
+		{
+			sources[i].classList.remove('geWorkspaceDragging');
+		}
+	}
+
+	function setDropTarget(event, destinationRelativePath, target)
+	{
+		if (draggedRelativePath == null) return false;
+		event.stopPropagation();
+
+		if (!canDropIn(destinationRelativePath))
+		{
+			event.dataTransfer.dropEffect = 'none';
+			clearDropTargets();
+			return false;
+		}
+
+		event.preventDefault();
+		event.dataTransfer.dropEffect = 'move';
+		clearDropTargets();
+		target.classList.add('geWorkspaceDropTarget');
+		return true;
+	}
+
+	function clearDropTarget(event, target)
+	{
+		if (event.relatedTarget == null || !target.contains(event.relatedTarget))
+		{
+			target.classList.remove('geWorkspaceDropTarget');
+		}
+	}
+
+	function moveDiagram(relativePath, destinationRelativePath)
+	{
+		var movingCurrentFile = state != null && normalizedPath(state.root + '/' + relativePath) ===
+			normalizedPath(currentFilePath());
+		var ready = movingCurrentFile ? saveCurrentFile() : Promise.resolve();
+
+		return ready.then(function()
+		{
+			return api.moveFile(relativePath, destinationRelativePath);
+		}).then(function(result)
+		{
+			state = result.state;
+			currentDirectory = destinationRelativePath;
+			if (destinationRelativePath) expanded[destinationRelativePath] = true;
+			render();
+
+			if (movingCurrentFile)
+			{
+				return api.resolveItem(result.movedRelativePath).then(function(resolved)
+				{
+					ui.loadArgs({args: [resolved.absolutePath]});
+				});
+			}
+		}).catch(showError);
+	}
+
+	function dropFile(event, destinationRelativePath, target)
+	{
+		if (!setDropTarget(event, destinationRelativePath, target)) return;
+		var relativePath = draggedRelativePath;
+		draggedRelativePath = null;
+		clearDragFeedback();
+		moveDiagram(relativePath, destinationRelativePath);
+	}
+
 	function renderNode(item, depth)
 	{
 		if (!matchesSearch(item)) return;
@@ -200,6 +302,18 @@ Draw.loadPlugin(function(ui)
 				expanded[item.relativePath] = !isExpanded;
 				render();
 			});
+			row.addEventListener('dragover', function(event)
+			{
+				setDropTarget(event, item.relativePath, row);
+			});
+			row.addEventListener('dragleave', function(event)
+			{
+				clearDropTarget(event, row);
+			});
+			row.addEventListener('drop', function(event)
+			{
+				dropFile(event, item.relativePath, row);
+			});
 		}
 		else
 		{
@@ -207,6 +321,20 @@ Draw.loadPlugin(function(ui)
 			row.appendChild(icon('file'));
 			if (isCurrentFile(item)) row.classList.add('geWorkspaceCurrent');
 			row.addEventListener('click', function() { openDiagram(item.relativePath); });
+			row.draggable = true;
+			row.addEventListener('dragstart', function(event)
+			{
+				event.stopPropagation();
+				draggedRelativePath = item.relativePath;
+				event.dataTransfer.effectAllowed = 'move';
+				event.dataTransfer.setData('application/x-draw-ai-workspace-file', item.relativePath);
+				window.setTimeout(function() { row.classList.add('geWorkspaceDragging'); }, 0);
+			});
+			row.addEventListener('dragend', function()
+			{
+				draggedRelativePath = null;
+				clearDragFeedback();
+			});
 		}
 
 		row.appendChild(element('span', 'geWorkspaceRowLabel', item.name));
@@ -401,6 +529,19 @@ Draw.loadPlugin(function(ui)
 	workspaceTab.addEventListener('click', function() { showMode('workspace'); });
 	shapesTab.addEventListener('click', function() { showMode('shapes'); });
 	identity.addEventListener('click', chooseWorkspace);
+	identity.title = '切换工作区；可将文件拖到这里移动到根目录';
+	identity.addEventListener('dragover', function(event)
+	{
+		setDropTarget(event, '', identity);
+	});
+	identity.addEventListener('dragleave', function(event)
+	{
+		clearDropTarget(event, identity);
+	});
+	identity.addEventListener('drop', function(event)
+	{
+		dropFile(event, '', identity);
+	});
 	refreshButton.addEventListener('click', loadState);
 	managerButton.addEventListener('click', function() { api.showManager().catch(showError); });
 	newFolderButton.addEventListener('click', function() { showNameDialog('directory'); });
@@ -409,6 +550,20 @@ Draw.loadPlugin(function(ui)
 	{
 		searchQuery = searchInput.value.trim().toLowerCase();
 		render();
+	});
+	tree.addEventListener('dragover', function(event)
+	{
+		if (event.target !== tree) return;
+		setDropTarget(event, '', tree);
+	});
+	tree.addEventListener('dragleave', function(event)
+	{
+		clearDropTarget(event, tree);
+	});
+	tree.addEventListener('drop', function(event)
+	{
+		if (event.target !== tree) return;
+		dropFile(event, '', tree);
 	});
 	graphModelListener = function() { render(); };
 	ui.editor.graph.getModel().addListener(mxEvent.CHANGE, graphModelListener);
