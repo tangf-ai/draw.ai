@@ -1,7 +1,7 @@
 {
   "name": "draw.ai",
   "productName": "draw.ai",
-  "version": "31.1.5",
+  "version": "0.1.0",
   "description": "Open-source AI diagram workspace based on draw.io",
   "exports": "./src/main/electron.js",
   "type": "module",

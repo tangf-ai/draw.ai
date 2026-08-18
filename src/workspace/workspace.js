@@ -5,7 +5,7 @@ const previewTemplateScenario = previewParameters.get('template');
 function previewApi()
 {
 	let state = {
-		root: '/Users/tangf/Documents/draw.ai Workspace',
+		root: '/Users/demo/Documents/draw.ai Workspace',
 		name: '我的图纸',
 		counts: {directories: 4, files: 3},
 		template: ['outdated', 'conflict'].includes(previewTemplateScenario) ? {

@@ -24,10 +24,16 @@ describe('draw.ai branding', () =>
 	test('package metadata points at the independent project', async () =>
 	{
 		const metadata = JSON.parse(await text('package.json'));
+		const lock = JSON.parse(await text('package-lock.json'));
+		const sync = await text('sync.cjs');
 		assert.equal(metadata.name, 'draw.ai');
 		assert.equal(metadata.productName, 'draw.ai');
 		assert.equal(metadata.repository.url, 'https://github.com/tangf-ai/draw.ai.git');
 		assert.equal(metadata.author, 'draw.ai contributors');
+		assert.equal(lock.version, metadata.version);
+		assert.equal(lock.packages[''].version, metadata.version);
+		assert.doesNotMatch(sync, /package\.json/,
+			'sync must not replace the draw.ai release version with the embedded draw.io version');
 	});
 
 	test('installer metadata uses the draw.ai application identity', async () =>
@@ -54,6 +60,8 @@ describe('draw.ai branding', () =>
 		const updateSwitch = await text('src/main/disableUpdate.js');
 		assert.match(workspace, /draw\.ai Workspace/);
 		assert.match(workspace, /title: 'draw\.ai 图纸工作区'/);
+		assert.match(await text('src/workspace/workspace.js'),
+			/root: '\/Users\/demo\/Documents\/draw\.ai Workspace'/);
 		assert.match(main, /owner: 'tangf-ai'/);
 		assert.match(main, /repo: 'draw\.ai'/);
 		assert.match(main, /build\/icon\.png/);

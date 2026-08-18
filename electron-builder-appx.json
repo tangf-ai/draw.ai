@@ -4,7 +4,15 @@
   "asar": true,
   "files": [
     "**/*",
-    "!**/WEB-INF{,/**}"
+    "!**/WEB-INF{,/**}",
+    "!.github{,/**}",
+    "!.gitmodules",
+    "!build{,/**}",
+    "!docs{,/**}",
+    "!src/test{,/**}",
+    "!README*.md",
+    "!electron-builder-*.json",
+    "!sync.cjs"
   ],
   "artifactName": "${productName}-${arch}-${version}.${ext}",
   "directories": {
