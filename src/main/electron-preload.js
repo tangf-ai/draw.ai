@@ -142,6 +142,8 @@ contextBridge.exposeInMainWorld('workspaceAPI', {
 		invokeWorkspace('workspace:create-directory', parentRelativePath, name),
 	createDiagram: (parentRelativePath, name) =>
 		invokeWorkspace('workspace:create-diagram', parentRelativePath, name),
+	moveFile: (relativePath, destinationRelativePath) =>
+		invokeWorkspace('workspace:move-file', relativePath, destinationRelativePath),
 	resolveItem: relativePath => invokeWorkspace('workspace:resolve-item', relativePath),
 	showManager: () => invokeWorkspace('workspace:show-manager'),
 	onChanged: callback =>
