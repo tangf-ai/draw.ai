@@ -27,11 +27,14 @@ jobs:
       - name: Validate JavaScript and JSON
         run: |
           node --check src/main/electron.js
+          node --check src/main/electron-preload.js
           node --check src/main/workspace-window.js
           node --check src/main/workspace-files.js
-          node --check src/main/ai-assistant.js
+          node --check src/main/workspace-agent.js
           node --check src/main/user-data-migration.js
-          node --check drawio/src/main/webapp/plugins/ai-assistant.js
+          node --check src/workspace/workspace.js
+          node --check drawio/src/main/webapp/plugins/workspace-agent.js
+          node --check drawio/src/main/webapp/plugins/workspace-explorer.js
           for file in package.json electron-builder-*.json; do jq -e . "$file" >/dev/null; done
       - name: Run tests
         run: npm test
