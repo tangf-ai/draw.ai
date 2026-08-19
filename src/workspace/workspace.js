@@ -273,6 +273,7 @@ let activeItem = null;
 let confirmMode = 'item';
 let toastTimer = null;
 let refreshTimer = null;
+let draggedRelativePath = null;
 const openingItems = new Set();
 
 function svgIcon(name, className = '')
@@ -369,6 +370,57 @@ function parentDirectory(relativePath)
 	return relativePath.split('/').slice(0, -1).join('/');
 }
 
+function clearDragFeedback()
+{
+	for (const target of elements.directoryTree.querySelectorAll('.is-drop-target'))
+	{
+		target.classList.remove('is-drop-target');
+	}
+
+	for (const source of elements.fileList.querySelectorAll('.is-dragging'))
+	{
+		source.classList.remove('is-dragging');
+	}
+}
+
+function canDropFile(destinationRelativePath)
+{
+	return draggedRelativePath != null && parentDirectory(draggedRelativePath) !== destinationRelativePath;
+}
+
+function setDropTarget(event, destinationRelativePath, target)
+{
+	if (!canDropFile(destinationRelativePath))
+	{
+		event.dataTransfer.dropEffect = 'none';
+		clearDragFeedback();
+		return false;
+	}
+
+	event.preventDefault();
+	event.stopPropagation();
+	event.dataTransfer.dropEffect = 'move';
+	clearDragFeedback();
+	target.classList.add('is-drop-target');
+	return true;
+}
+
+async function dropFile(event, destinationRelativePath, target)
+{
+	if (!setDropTarget(event, destinationRelativePath, target)) return;
+
+	const relativePath = draggedRelativePath;
+	draggedRelativePath = null;
+	clearDragFeedback();
+
+	const result = await runAction(() => api.moveFile(relativePath, destinationRelativePath), '文件已移动');
+	if (result)
+	{
+		workspaceState = result.state;
+		render();
+	}
+}
+
 function currentNodes()
 {
 	if (searchQuery)
@@ -446,6 +498,21 @@ function createTreeRow(node, depth)
 	label.textContent = node.name;
 	button.appendChild(label);
 	button.addEventListener('click', () => selectDirectory(node.relativePath));
+	button.addEventListener('dragover', (event) =>
+	{
+		setDropTarget(event, node.relativePath, button);
+	});
+	button.addEventListener('dragleave', (event) =>
+	{
+		if (event.relatedTarget == null || !button.contains(event.relatedTarget))
+		{
+			button.classList.remove('is-drop-target');
+		}
+	});
+	button.addEventListener('drop', (event) =>
+	{
+		dropFile(event, node.relativePath, button);
+	});
 	wrapper.appendChild(button);
 
 	for (const child of node.children || [])
@@ -507,6 +574,24 @@ function createFileRow(node)
 	row.className = 'file-row';
 	row.dataset.path = node.relativePath;
 	row.setAttribute('data-testid', `file-row-${node.relativePath}`);
+
+	if (node.type === 'file')
+	{
+		row.draggable = true;
+		row.title = '拖到左侧目录移动图纸';
+		row.addEventListener('dragstart', (event) =>
+		{
+			draggedRelativePath = node.relativePath;
+			event.dataTransfer.effectAllowed = 'move';
+			event.dataTransfer.setData('application/x-draw-ai-workspace-file', node.relativePath);
+			requestAnimationFrame(() => row.classList.add('is-dragging'));
+		});
+		row.addEventListener('dragend', () =>
+		{
+			draggedRelativePath = null;
+			clearDragFeedback();
+		});
+	}
 
 	const nameCell = document.createElement('td');
 	const nameButton = document.createElement('button');
@@ -846,6 +931,13 @@ elements.nameForm.addEventListener('submit', async (event) =>
 	{
 		await runAction(() => api.openItem(result.createdRelativePath));
 	}
+});
+
+elements.nameForm.addEventListener('keydown', (event) =>
+{
+	if (event.key !== 'Enter' || event.isComposing || event.target !== elements.nameInput) return;
+	event.preventDefault();
+	elements.nameForm.requestSubmit(elements.nameSubmit);
 });
 
 elements.confirmForm.addEventListener('submit', async (event) =>

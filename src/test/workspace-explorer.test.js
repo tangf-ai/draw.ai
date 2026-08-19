@@ -43,4 +43,24 @@ describe('editor workspace explorer', () =>
 		assert.match(plugin, /api\.resolveItem\(result\.movedRelativePath\)/);
 		assert.match(plugin, /ui\.loadArgs\(\{args: \[resolved\.absolutePath\]\}\)/);
 	});
+
+	test('wires manager file rows to directory drag-and-drop targets', async () =>
+	{
+		const manager = await source('src/workspace/workspace.js');
+
+		assert.match(manager, /row\.draggable = true/);
+		assert.match(manager, /application\/x-draw-ai-workspace-file/);
+		assert.match(manager, /button\.addEventListener\('dragover'/);
+		assert.match(manager, /button\.addEventListener\('drop'/);
+		assert.match(manager, /api\.moveFile\(relativePath, destinationRelativePath\)/);
+	});
+
+	test('pressing Enter in the name dialog submits the save button', async () =>
+	{
+		const manager = await source('src/workspace/workspace.js');
+
+		assert.match(manager, /elements\.nameForm\.addEventListener\('keydown'/);
+		assert.match(manager, /event\.key !== 'Enter'/);
+		assert.match(manager, /elements\.nameForm\.requestSubmit\(elements\.nameSubmit\)/);
+	});
 });
