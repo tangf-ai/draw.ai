@@ -1326,6 +1326,137 @@
 	/**
 	 * Adds keyboard shortcuts for page handling.
 	 */
+	var editorUiTabCreateGap = 40;
+	var editorUiTabCreateMaxColumns = 20;
+	var editorUiTabCreateMaxRows = 100;
+
+	/**
+	 * Finds a free position to the right of a vertex, then scans a grid below it
+	 * when that position is occupied. Coordinates are local to the vertex parent.
+	 */
+	function editorUiFindTabCreatePosition(graph, parent, source, width, height)
+	{
+		var sourceGeometry = graph.model.getGeometry(source);
+		var baseX = Math.round(sourceGeometry.x + sourceGeometry.width + editorUiTabCreateGap);
+		var baseY = Math.round(sourceGeometry.y);
+		var stepX = Math.max(1, Math.round(width + editorUiTabCreateGap));
+		var stepY = Math.max(1, Math.round(height + editorUiTabCreateGap));
+		var vertices = graph.getChildVertices(parent);
+
+		for (var row = 0; row < editorUiTabCreateMaxRows; row++)
+		{
+			for (var column = 0; column < editorUiTabCreateMaxColumns; column++)
+			{
+				var candidate = new mxRectangle(baseX + column * stepX,
+					baseY + row * stepY, width, height);
+				var occupied = false;
+
+				for (var i = 0; i < vertices.length; i++)
+				{
+					var geometry = graph.model.getGeometry(vertices[i]);
+
+					if (geometry != null && !geometry.relative &&
+						mxUtils.intersects(candidate, geometry))
+					{
+						occupied = true;
+						break;
+					}
+				}
+
+				if (!occupied)
+				{
+					return candidate;
+				}
+			}
+		}
+
+		// Keep the fallback to the right of every direct child. This preserves the
+		// non-overlap guarantee even when the bounded grid is full.
+		var rightmost = baseX;
+
+		for (var j = 0; j < vertices.length; j++)
+		{
+			var childGeometry = graph.model.getGeometry(vertices[j]);
+
+			if (childGeometry != null && !childGeometry.relative)
+			{
+				rightmost = Math.max(rightmost, childGeometry.x + childGeometry.width + editorUiTabCreateGap);
+			}
+		}
+
+		return new mxRectangle(Math.round(rightmost), baseY, width, height);
+	}
+
+	/**
+	 * Creates a linked vertex for an unmodified Tab press.
+	 */
+	function editorUiCreateTabVertex(graph)
+	{
+		var selectedCells = graph.getSelectionCells();
+
+		if (selectedCells == null || selectedCells.length != 1 ||
+			graph.isEditing() || !graph.isEnabled())
+		{
+			return null;
+		}
+
+		var source = selectedCells[0];
+
+		if (!graph.model.isVertex(source) || graph.isCellLocked(source))
+		{
+			return null;
+		}
+
+		var parent = graph.model.getParent(source);
+		var sourceGeometry = graph.model.getGeometry(source);
+
+		if (parent == null || graph.isCellLocked(parent) || sourceGeometry == null ||
+			sourceGeometry.relative)
+		{
+			return null;
+		}
+
+		var width = Math.max(1, Number(sourceGeometry.width) || 1);
+		var height = Math.max(1, Number(sourceGeometry.height) || 1);
+		var position = editorUiFindTabCreatePosition(graph, parent, source, width, height);
+		var vertex = null;
+
+		graph.model.beginUpdate();
+		try
+		{
+			vertex = graph.insertVertex(parent, null, '', position.x, position.y,
+				width, height, source.style, sourceGeometry.relative);
+			graph.insertEdge(parent, null, '', source, vertex,
+				(typeof graph.createCurrentEdgeStyle == 'function') ?
+					graph.createCurrentEdgeStyle() : null);
+		}
+		finally
+		{
+			graph.model.endUpdate();
+		}
+
+		graph.setSelectionCell(vertex);
+
+		return vertex;
+	}
+
+	// The graph container handles Tab before mxKeyHandler sees the event. Intercept
+	// it here so a selected vertex can create its successor instead of being moved
+	// through the normal selection order.
+	var editorUiCreateOnKeyDown = EditorUi.prototype.onKeyDown;
+	EditorUi.prototype.onKeyDown = function(evt)
+	{
+		if (evt != null && (evt.keyCode == 9 || evt.which == 9) &&
+			!evt.shiftKey && !evt.ctrlKey && !evt.metaKey && !evt.altKey &&
+			editorUiCreateTabVertex(this.editor.graph) != null)
+		{
+			mxEvent.consume(evt);
+			return;
+		}
+
+		return editorUiCreateOnKeyDown.apply(this, arguments);
+	};
+
     var editorUiCreateKeyHandler = EditorUi.prototype.createKeyHandler;
     EditorUi.prototype.createKeyHandler = function(editor)
     {
@@ -1339,6 +1470,20 @@
 	    	
 	    	keyHandler.getFunction = function(evt)
 	    	{
+			// Tab creates a child only for one unlocked, non-editing vertex.
+			if (evt.keyCode == 9 && !evt.shiftKey && !evt.ctrlKey &&
+				!evt.metaKey && !evt.altKey)
+			{
+				if (graph.getSelectionCells() != null && graph.getSelectionCells().length == 1 &&
+					!graph.isEditing() && graph.model.isVertex(graph.getSelectionCell()))
+				{
+					return function()
+					{
+						editorUiCreateTabVertex(graph);
+					};
+				}
+			}
+
 	    		if (graph.isSelectionEmpty() && ui.pages != null && ui.pages.length > 0)
 	    		{
 	    			var idx = ui.getSelectedPageIndex();
