@@ -3978,6 +3978,12 @@ ipcMain.on("rendererReq", async (event, args) =>
 		case 'workspaceAgentGetState':
 			ret = await workspaceAgentService.getState();
 			break;
+		case 'workspaceAgentGetProfile':
+			ret = workspaceAgentService.getProfile();
+			break;
+		case 'workspaceAgentSetProfile':
+			ret = workspaceAgentService.setProfile(args.profile);
+			break;
 		case 'workspaceAgentChat':
 			ret = await workspaceAgentService.chat(args.input, progress =>
 			{

@@ -50,9 +50,32 @@ export function readWorkspaceAgentCodexProfile(store)
 	const legacy = legacyProfiles != null && typeof legacyProfiles === 'object' ? legacyProfiles.codex : null;
 	const source = current != null && typeof current === 'object' ? current :
 		(legacy != null && typeof legacy === 'object' ? legacy : {});
-	const command = typeof source.command === 'string' && source.command.trim() !== '' &&
-		!/[\0\r\n]/.test(source.command) ? source.command.trim() : 'codex';
-	const model = typeof source.model === 'string' ? source.model.trim().slice(0, 200) : '';
+	try
+	{
+		return normalizeWorkspaceAgentCodexProfile(source);
+	}
+	catch (error)
+	{
+		return {command: 'codex', model: ''};
+	}
+}
+
+function normalizeWorkspaceAgentCodexProfile(value)
+{
+	const source = value != null && typeof value === 'object' ? value : {};
+	const command = typeof source.command === 'string' ? source.command.trim() : '';
+	const model = typeof source.model === 'string' ? source.model.trim() : '';
+
+	if (command === '' || command.length > 2048 || /[\0\r\n]/.test(command))
+	{
+		throw agentError('Codex 命令无效', 'WORKSPACE_AGENT_INVALID_INPUT');
+	}
+
+	if (model.length > 200 || /[\0\r\n]/.test(model))
+	{
+		throw agentError('模型名称无效', 'WORKSPACE_AGENT_INVALID_INPUT');
+	}
+
 	return {command, model};
 }
 
@@ -896,16 +919,18 @@ export function createWorkspaceAgentService({
 	return {
 		async getState()
 		{
+			const profile = typeof getCodexProfile === 'function' ? getCodexProfile() :
+				{command: 'codex', model: ''};
 			let root = null;
 
 			try { root = await resolveWorkspaceRoot(getWorkspaceRoot); }
 			catch (error)
 			{
-				return {configured: false, busy: false, threadId: null, messages: [], canRollback: false};
+				return {configured: false, busy: false, threadId: null, messages: [], canRollback: false,
+					command: profile.command || 'codex', model: profile.model || ''};
 			}
 
 			const session = readSession(store, root);
-			const profile = typeof getCodexProfile === 'function' ? getCodexProfile() : {};
 			return {
 				configured: true,
 				root,
@@ -916,6 +941,27 @@ export function createWorkspaceAgentService({
 				command: profile?.command || 'codex',
 				model: profile?.model || ''
 			};
+		},
+
+		getProfile()
+		{
+			const profile = typeof getCodexProfile === 'function' ? getCodexProfile() : {};
+			return {command: profile.command || 'codex', model: profile.model || ''};
+		},
+
+		setProfile(input)
+		{
+			if (active != null) throw agentError('请先停止当前任务，再修改模型配置', 'WORKSPACE_AGENT_BUSY');
+			if (store == null) throw agentError('无法保存模型配置', 'WORKSPACE_AGENT_CONFIG_ERROR');
+			const current = typeof getCodexProfile === 'function' ? getCodexProfile() :
+				{command: 'codex', model: ''};
+			const source = input != null && typeof input === 'object' ? input : {};
+			const profile = normalizeWorkspaceAgentCodexProfile({
+				command: source.command == null ? current.command : source.command,
+				model: source.model == null ? current.model : source.model
+			});
+			store.set(CODEX_PROFILE_STORE_KEY, profile);
+			return profile;
 		},
 
 		async chat(input, onProgress)

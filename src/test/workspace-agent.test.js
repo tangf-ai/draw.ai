@@ -47,6 +47,38 @@ test('Workspace Agent keeps an existing Codex profile without the removed assist
 		{command: 'codex', model: ''});
 });
 
+test('Workspace Agent persists validated model configuration for the next turn', async () =>
+{
+	const files = await fixture();
+	const store = new MemoryStore();
+	const service = createWorkspaceAgentService({
+		store,
+		getWorkspaceRoot: () => files.root,
+		getCodexProfile: () => readWorkspaceAgentCodexProfile(store),
+		stateDir: files.stateDir,
+		spawnImpl: () => { throw new Error('Codex should not start while testing configuration'); }
+	});
+
+	try
+	{
+		assert.deepEqual(service.getProfile(), {command: 'codex', model: ''});
+		assert.deepEqual(service.setProfile({command: '/opt/codex', model: 'gpt-test'}),
+			{command: '/opt/codex', model: 'gpt-test'});
+		assert.deepEqual(service.getProfile(), {command: '/opt/codex', model: 'gpt-test'});
+		assert.deepEqual(store.get('workspaceAgent.codexProfile'),
+			{command: '/opt/codex', model: 'gpt-test'});
+		assert.throws(() => service.setProfile({command: '/opt/codex\n--unsafe'}),
+			error => error.code === 'WORKSPACE_AGENT_INVALID_INPUT');
+		assert.throws(() => service.setProfile({command: '/opt/codex', model: 'x'.repeat(201)}),
+			error => error.code === 'WORKSPACE_AGENT_INVALID_INPUT');
+	}
+	finally
+	{
+		service.stop();
+		await rm(files.temporary, {recursive: true, force: true});
+	}
+});
+
 function fakeAppServer({onTurn, onClientResponse} = {})
 {
 	const requests = [];
@@ -375,6 +407,11 @@ test('editor Agent panel uses the file-safe direct editing lifecycle', async () 
 	assert.match(electronSource, /var workspaceAgentPluginUrl = '\.\/plugins\/workspace-agent\.js'/);
 	assert.doesNotMatch(pluginSource, /\bai(?:GetConfig|SaveConfig|ActivateEngine|TestConfig|Chat|ListMemories|SaveCorrection|DeleteMemory)\b/);
 	assert.match(pluginSource, /workspaceAgentChat/);
+	assert.match(pluginSource, /workspaceAgentGetProfile/);
+	assert.match(pluginSource, /workspaceAgentSetProfile/);
+	assert.match(pluginSource, /agentInput\.disabled = agentLoading/);
+	assert.match(pluginSource, /agentInput\.focus\(\)/);
+	assert.match(pluginSource, /配置 Agent 模型/);
 	assert.match(pluginSource, /workspaceAgentApprove/);
 	assert.match(pluginSource, /workspaceAgentSteer/);
 	assert.match(pluginSource, /workspaceAgentInterrupt/);
@@ -386,6 +423,8 @@ test('editor Agent panel uses the file-safe direct editing lifecycle', async () 
 	assert.match(pluginSource, /ui\.synchronizeCurrentFile\(true\)/,
 		'older editor bundles retain a force-reload fallback');
 	assert.doesNotMatch(mainSource, /case 'aiGetConfig'/);
+	assert.match(mainSource, /case 'workspaceAgentGetProfile'/);
+	assert.match(mainSource, /case 'workspaceAgentSetProfile'/);
 	assert.doesNotMatch(mainSource, /case 'aiChat'/);
 	assert.doesNotMatch(mainSource, /case 'aiListMemories'/);
 	assert.doesNotMatch(mainSource, /createAiAssistantService/);
