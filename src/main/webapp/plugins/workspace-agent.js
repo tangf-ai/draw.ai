@@ -237,6 +237,15 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 		'.geAgentPageScopeItem span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
 		'.geAgentPageScopeCount{margin-top:9px;color:light-dark(#5f6368,#bdc1c6);font-size:12px}',
 		'.geAgentPageScopeActions{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}',
+		'.geAgentProfileDialog{display:flex;min-width:320px;max-width:440px;flex-direction:column;font:13px Arial,sans-serif;color:light-dark(#202124,#e8eaed)}',
+		'.geAgentProfileTitle{font-weight:600;margin:0 0 8px}',
+		'.geAgentProfileHint{margin:0 0 14px;color:light-dark(#5f6368,#bdc1c6);font-size:12px;line-height:1.45}',
+		'.geAgentProfileField{display:flex;flex-direction:column;gap:5px;margin-bottom:12px}',
+		'.geAgentProfileField label{font-size:12px;color:light-dark(#5f6368,#bdc1c6)}',
+		'.geAgentProfileInput{height:32px;box-sizing:border-box;border:1px solid light-dark(#c8ccd2,#5f6368);border-radius:4px;background:light-dark(#fff,#292a2e);color:inherit;padding:6px 8px;font:13px Arial,sans-serif;outline:none}',
+		'.geAgentProfileInput:focus{border-color:#1a73e8;box-shadow:0 0 0 1px #1a73e8}',
+		'.geAgentProfileError{min-height:17px;margin:-2px 0 8px;color:light-dark(#b3261e,#f28b82);font-size:12px}',
+		'.geAgentProfileActions{display:flex;justify-content:flex-end;gap:8px;margin-top:2px}',
 		'.geAgentComposer{display:flex;flex-direction:column;gap:6px;padding:9px 10px 10px;border-top:1px solid light-dark(#e1e4e8,#3c4043);box-sizing:border-box}',
 		'.geAgentComposerRow{display:flex;align-items:flex-end;gap:7px;min-width:0}',
 		'.geAgentInput{min-width:0;flex:1;resize:none;box-sizing:border-box;min-height:62px;max-height:150px;border:1px solid light-dark(#c8ccd2,#5f6368);border-radius:6px;background:light-dark(#fff,#292a2e);color:inherit;padding:8px;font:13px/1.45 Arial,sans-serif;letter-spacing:0;outline:none}',
@@ -274,6 +283,7 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 	agentPageScopeSelect.appendChild(agentPageScopeAllOption);
 	agentPageScopeSelect.appendChild(agentPageScopeCustomOption);
 	var agentNewThreadButton = createButton('geAgentIconBtn', '+', '新建 Agent 对话');
+	var agentProfileButton = createButton('geAgentIconBtn', '⚙', '配置 Agent 模型');
 	var agentRollbackButton = createButton('geAgentIconBtn', '↶', '撤回上一轮 Agent 文件修改');
 	var agentStopButton = createButton('geAgentIconBtn', '■', '停止 Agent');
 	agentRollbackButton.disabled = true;
@@ -281,6 +291,7 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 	agentToolbar.appendChild(agentContextLabel);
 	agentToolbar.appendChild(agentPageScopeSelect);
 	agentToolbar.appendChild(agentNewThreadButton);
+	agentToolbar.appendChild(agentProfileButton);
 	agentToolbar.appendChild(agentRollbackButton);
 	agentToolbar.appendChild(agentStopButton);
 	agentView.appendChild(agentToolbar);
@@ -773,14 +784,90 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 		agentComposerStatus.textContent = agentStatusText();
 		agentSendButton.disabled = agentLoading ||
 			(agentState != null && agentState.configured === false);
+		agentInput.disabled = agentLoading ||
+			(agentState != null && agentState.configured === false);
 		agentSendButton.textContent = agentBusy ? '↗' : '↑';
 		agentSendButton.title = agentBusy ? '补充要求' : '发送';
 		agentInput.setAttribute('placeholder', agentBusy ? '补充当前任务的要求' : '向 Agent 提交修改要求');
 		agentNewThreadButton.disabled = agentBusy || agentLoading;
+		agentProfileButton.disabled = agentBusy || agentLoading;
 		agentRollbackButton.disabled = agentBusy || agentLoading ||
 			agentState == null || agentState.canRollback !== true;
 		agentStopButton.disabled = !agentBusy;
 		updatePageScopeOptions();
+	}
+
+	function showAgentProfileDialog()
+	{
+		if (agentBusy || agentLoading) return;
+		var dialog = createElement('div', 'geAgentProfileDialog');
+		var title = createElement('div', 'geAgentProfileTitle', 'Agent 模型配置');
+		var hint = createElement('div', 'geAgentProfileHint',
+			'配置 Codex 命令和模型名称。模型留空时使用 Codex 默认模型，保存后对下一轮任务生效。');
+		var commandField = createElement('div', 'geAgentProfileField');
+		var commandLabel = createElement('label', null, 'Codex 命令');
+		var commandInput = createElement('input', 'geAgentProfileInput');
+		commandInput.type = 'text';
+		commandInput.autocomplete = 'off';
+		commandInput.spellcheck = false;
+		commandInput.value = agentState != null && agentState.command ? agentState.command : 'codex';
+		commandLabel.htmlFor = 'geAgentCodexCommand';
+		commandInput.id = 'geAgentCodexCommand';
+		commandField.appendChild(commandLabel);
+		commandField.appendChild(commandInput);
+		var modelField = createElement('div', 'geAgentProfileField');
+		var modelLabel = createElement('label', null, '模型名称');
+		var modelInput = createElement('input', 'geAgentProfileInput');
+		modelInput.type = 'text';
+		modelInput.autocomplete = 'off';
+		modelInput.spellcheck = false;
+		modelInput.placeholder = '例如 gpt-5.6-sol';
+		modelInput.value = agentState != null && agentState.model ? agentState.model : '';
+		modelLabel.htmlFor = 'geAgentCodexModel';
+		modelInput.id = 'geAgentCodexModel';
+		modelField.appendChild(modelLabel);
+		modelField.appendChild(modelInput);
+		var error = createElement('div', 'geAgentProfileError');
+		var actions = createElement('div', 'geAgentProfileActions');
+		var cancelButton = createButton('geAgentButton', '取消');
+		var saveButton = createButton('geAgentButton geAgentButtonPrimary', '保存');
+
+		cancelButton.addEventListener('click', function() { ui.hideDialog(); });
+		saveButton.addEventListener('click', function()
+		{
+			error.textContent = '';
+			saveButton.disabled = true;
+			request('workspaceAgentSetProfile', {profile: {
+				command: commandInput.value,
+				model: modelInput.value
+			}}).then(function(profile)
+			{
+				agentState = Object.assign({}, agentState || {}, profile);
+				ui.hideDialog();
+				updateAgentControls();
+				agentInput.focus();
+			}).catch(function(saveError)
+			{
+				error.textContent = saveError.message || '模型配置保存失败';
+				saveButton.disabled = false;
+			});
+		});
+		actions.appendChild(cancelButton);
+		actions.appendChild(saveButton);
+		dialog.appendChild(title);
+		dialog.appendChild(hint);
+		dialog.appendChild(commandField);
+		dialog.appendChild(modelField);
+		dialog.appendChild(error);
+		dialog.appendChild(actions);
+		ui.showDialog(dialog, 400, 300, true, true);
+		request('workspaceAgentGetProfile').then(function(profile)
+		{
+			agentState = Object.assign({}, agentState || {}, profile);
+			commandInput.value = profile.command || 'codex';
+			modelInput.value = profile.model || '';
+		}).catch(function() {});
+		window.setTimeout(function() { commandInput.focus(); commandInput.select(); }, 0);
 	}
 
 	function setAgentBusy(busy)
@@ -1248,6 +1335,10 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 			{
 				agentLoading = false;
 				updateAgentControls();
+				if (!agentDisposed && !agentInput.disabled)
+				{
+					window.setTimeout(function() { agentInput.focus(); }, 0);
+				}
 			});
 		}
 
@@ -1323,6 +1414,7 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 	agentPageScopeSelect.addEventListener('change', handlePageScopeChange);
 	agentSendButton.addEventListener('click', sendAgentPrompt);
 	agentNewThreadButton.addEventListener('click', newAgentThread);
+	agentProfileButton.addEventListener('click', showAgentProfileDialog);
 	agentStopButton.addEventListener('click', stopAgent);
 	agentRollbackButton.addEventListener('click', function()
 	{
