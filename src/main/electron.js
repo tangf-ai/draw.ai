@@ -18,7 +18,7 @@ import contextMenu from 'electron-context-menu';
 import {spawn, exec} from 'child_process';
 import {disableUpdate as disUpPkg} from './disableUpdate.js';
 import {createWorkspaceController, workspaceCodeUrl} from './workspace-window.js';
-import {createWorkspaceAgentService, readWorkspaceAgentCodexProfile} from './workspace-agent.js';
+import {createWorkspaceAgentService, readWorkspaceAgentPiProfile} from './workspace-agent.js';
 import {migrateLegacyUserData} from './user-data-migration.js';
 
 let store;
@@ -51,7 +51,7 @@ catch (e)
 workspaceAgentService = createWorkspaceAgentService({
 	store,
 	getWorkspaceRoot: () => store?.get('workspaceRoot'),
-	getCodexProfile: () => readWorkspaceAgentCodexProfile(store),
+	getPiProfile: () => readWorkspaceAgentPiProfile(store),
 	stateDir: path.join(app.getPath('userData'), 'workspace-agent')
 });
 

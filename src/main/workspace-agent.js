@@ -1,13 +1,14 @@
 import {spawn as nodeSpawn} from 'node:child_process';
 import crypto from 'node:crypto';
-import {promises as fs} from 'node:fs';
+import {readdirSync, promises as fs} from 'node:fs';
 import path from 'node:path';
-import readline from 'node:readline';
+import {StringDecoder} from 'node:string_decoder';
 import {DOMParser} from '@xmldom/xmldom';
 
-const SESSION_STORE_KEY = 'workspaceAgent.sessions';
-const CODEX_PROFILE_STORE_KEY = 'workspaceAgent.codexProfile';
-const LEGACY_ENGINE_CONFIGS_KEY = 'aiAssistant.engineConfigs';
+const SESSION_STORE_KEY = 'workspaceAgent.piSessions';
+const PI_PROFILE_STORE_KEY = 'workspaceAgent.piProfile';
+const DEFAULT_PI_COMMAND = 'pi';
+const PI_SESSION_DIRECTORY = 'pi-sessions';
 const CHECKPOINT_RESULT_FILE = 'result.json';
 const MAX_MESSAGES = 100;
 const MAX_PROMPT_LENGTH = 30000;
@@ -21,7 +22,62 @@ const RPC_TIMEOUT_MS = 30000;
 const MAX_STDERR_LENGTH = 200000;
 const SKIPPED_DIRECTORIES = new Set(['.git', '.draw.ai', 'node_modules']);
 
-export function buildLocalEngineEnvironment(source = process.env, platform = process.platform)
+function defaultListDirectories(directory)
+{
+	try
+	{
+		return readdirSync(directory, {withFileTypes: true}).
+			filter(entry => entry.isDirectory()).map(entry => entry.name);
+	}
+	catch (error)
+	{
+		return [];
+	}
+}
+
+function compareNodeVersions(left, right)
+{
+	const parse = value => String(value).replace(/^v/, '').split('.').
+		map(part => parseInt(part, 10) || 0);
+	const leftParts = parse(left);
+	const rightParts = parse(right);
+
+	for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index++)
+	{
+		const difference = (rightParts[index] || 0) - (leftParts[index] || 0);
+		if (difference !== 0) return difference;
+	}
+
+	return 0;
+}
+
+// GUI launches on macOS do not inherit the login shell's PATH, so a `pi`
+// installed by nvm, fnm, pnpm, yarn, or bun is invisible unless its bin
+// directory is added explicitly.
+function versionManagerCandidates(home, listDirectories)
+{
+	const candidates = [];
+	const nvmRoot = path.join(home, '.nvm', 'versions', 'node');
+
+	for (const version of listDirectories(nvmRoot).slice().sort(compareNodeVersions))
+	{
+		candidates.push(path.join(nvmRoot, version, 'bin'));
+	}
+
+	candidates.push(
+		path.join(home, '.local', 'share', 'fnm', 'aliases', 'default', 'bin'),
+		path.join(home, 'Library', 'Application Support', 'fnm', 'aliases', 'default', 'bin'),
+		path.join(home, '.nodenv', 'shims'),
+		path.join(home, 'Library', 'pnpm'),
+		path.join(home, '.local', 'share', 'pnpm'),
+		path.join(home, '.yarn', 'bin'),
+		path.join(home, '.bun', 'bin'));
+
+	return candidates;
+}
+
+export function buildLocalEngineEnvironment(source = process.env, platform = process.platform,
+	listDirectories = defaultListDirectories)
 {
 	const env = {...source};
 	const home = source.HOME || source.USERPROFILE || '';
@@ -32,6 +88,7 @@ export function buildLocalEngineEnvironment(source = process.env, platform = pro
 		candidates.push(path.join(home, '.local', 'bin'), path.join(home, 'bin'),
 			path.join(home, '.volta', 'bin'), path.join(home, '.asdf', 'shims'),
 			path.join(home, '.local', 'share', 'mise', 'shims'));
+		candidates.push(...versionManagerCandidates(home, listDirectories));
 
 		if (platform === 'win32') candidates.push(path.join(home, 'AppData', 'Roaming', 'npm'));
 	}
@@ -43,24 +100,26 @@ export function buildLocalEngineEnvironment(source = process.env, platform = pro
 	return env;
 }
 
-export function readWorkspaceAgentCodexProfile(store)
+export function readWorkspaceAgentPiProfile(store)
 {
-	const current = store?.get(CODEX_PROFILE_STORE_KEY);
-	const legacyProfiles = store?.get(LEGACY_ENGINE_CONFIGS_KEY);
-	const legacy = legacyProfiles != null && typeof legacyProfiles === 'object' ? legacyProfiles.codex : null;
-	const source = current != null && typeof current === 'object' ? current :
-		(legacy != null && typeof legacy === 'object' ? legacy : {});
+	const current = store?.get(PI_PROFILE_STORE_KEY);
+	const source = current != null && typeof current === 'object' ? current : {};
+
 	try
 	{
-		return normalizeWorkspaceAgentCodexProfile(source);
+		return normalizeWorkspaceAgentPiProfile({
+			command: typeof source.command === 'string' && source.command.trim() !== '' ?
+				source.command : DEFAULT_PI_COMMAND,
+			model: source.model
+		});
 	}
 	catch (error)
 	{
-		return {command: 'codex', model: ''};
+		return {command: DEFAULT_PI_COMMAND, model: ''};
 	}
 }
 
-function normalizeWorkspaceAgentCodexProfile(value)
+function normalizeWorkspaceAgentPiProfile(value)
 {
 	const source = value != null && typeof value === 'object' ? value : {};
 	const command = typeof source.command === 'string' ? source.command.trim() : '';
@@ -68,7 +127,7 @@ function normalizeWorkspaceAgentCodexProfile(value)
 
 	if (command === '' || command.length > 2048 || /[\0\r\n]/.test(command))
 	{
-		throw agentError('Codex 命令无效', 'WORKSPACE_AGENT_INVALID_INPUT');
+		throw agentError('Pi 命令无效', 'WORKSPACE_AGENT_INVALID_INPUT');
 	}
 
 	if (model.length > 200 || /[\0\r\n]/.test(model))
@@ -138,12 +197,12 @@ function readSession(store, root)
 
 	if (value == null || typeof value !== 'object' || value.root !== root)
 	{
-		return {root, threadId: null, messages: [], lastCheckpoint: null};
+		return {root, sessionId: null, messages: [], lastCheckpoint: null};
 	}
 
 	return {
 		root,
-		threadId: typeof value.threadId === 'string' ? value.threadId : null,
+		sessionId: typeof value.sessionId === 'string' ? value.sessionId : null,
 		messages: Array.isArray(value.messages) ? value.messages.slice(-MAX_MESSAGES) : [],
 		lastCheckpoint: value.lastCheckpoint != null && typeof value.lastCheckpoint === 'object' ?
 			value.lastCheckpoint : null
@@ -463,15 +522,58 @@ function redactSensitive(value)
 		'$1$2[REDACTED]').slice(0, 4000);
 }
 
-class AppServerClient
+// Pi speaks strict JSONL on stdin/stdout: records are delimited by LF only.
+// Node's readline also splits on U+2028/U+2029, which are legal inside JSON
+// strings, so the client frames records itself with a StringDecoder.
+function attachJsonlReader(stream, onLine)
 {
-	constructor({command, cwd, spawnImpl, onNotification, onServerRequest, onExit})
+	const decoder = new StringDecoder('utf8');
+	let buffer = '';
+
+	function drain(final)
+	{
+		buffer += final ? decoder.end() : '';
+
+		while (true)
+		{
+			const index = buffer.indexOf('\n');
+			if (index === -1) break;
+			const line = buffer.slice(0, index).replace(/\r$/, '');
+			buffer = buffer.slice(index + 1);
+			if (line !== '') onLine(line);
+		}
+
+		if (final && buffer !== '')
+		{
+			const line = buffer.replace(/\r$/, '');
+			buffer = '';
+			if (line !== '') onLine(line);
+		}
+	}
+
+	stream.on('data', chunk =>
+	{
+		buffer += decoder.write(chunk);
+		drain(false);
+	});
+	stream.on('end', () => drain(true));
+}
+
+const PI_DIALOG_METHODS = new Set(['confirm', 'select', 'input', 'editor']);
+
+class PiRpcClient
+{
+	constructor({command, cwd, sessionDirectory, sessionId, model, spawnImpl,
+		onEvent, onUiRequest, onExit})
 	{
 		this.command = command;
 		this.cwd = cwd;
+		this.sessionDirectory = sessionDirectory;
+		this.sessionId = sessionId;
+		this.model = model;
 		this.spawnImpl = spawnImpl;
-		this.onNotification = onNotification;
-		this.onServerRequest = onServerRequest;
+		this.onEvent = onEvent;
+		this.onUiRequest = onUiRequest;
 		this.onExit = onExit;
 		this.child = null;
 		this.starting = null;
@@ -480,6 +582,16 @@ class AppServerClient
 		this.stderr = '';
 		this.expectedClose = false;
 		this.exitHandled = false;
+		this.exitError = null;
+	}
+
+	buildArgs()
+	{
+		const args = ['--mode', 'rpc', '--session-dir', this.sessionDirectory,
+			'--session-id', this.sessionId, '--append-system-prompt', workspaceDeveloperInstructions()];
+
+		if (this.model !== '') args.push('--model', this.model);
+		return args;
 	}
 
 	async start()
@@ -491,11 +603,12 @@ class AppServerClient
 		{
 			this.expectedClose = false;
 			this.exitHandled = false;
+			this.exitError = null;
 			this.stderr = '';
 
 			try
 			{
-				this.child = this.spawnImpl(this.command, ['app-server', '--listen', 'stdio://'], {
+				this.child = this.spawnImpl(this.command, this.buildArgs(), {
 					cwd: this.cwd,
 					env: buildLocalEngineEnvironment(),
 					stdio: ['pipe', 'pipe', 'pipe'],
@@ -504,12 +617,11 @@ class AppServerClient
 			}
 			catch (error)
 			{
-				throw agentError(`无法启动 Codex：${error.message}`,
-					error.code === 'ENOENT' ? 'WORKSPACE_AGENT_CODEX_NOT_FOUND' : 'WORKSPACE_AGENT_START_FAILED');
+				throw agentError(`无法启动 Pi：${error.message}`,
+					error.code === 'ENOENT' ? 'WORKSPACE_AGENT_PI_NOT_FOUND' : 'WORKSPACE_AGENT_START_FAILED');
 			}
 
-			const lines = readline.createInterface({input: this.child.stdout});
-			lines.on('line', line => this.handleLine(line));
+			attachJsonlReader(this.child.stdout, line => this.handleLine(line));
 			this.child.stderr.on('data', chunk =>
 			{
 				this.stderr += chunk.toString();
@@ -524,15 +636,10 @@ class AppServerClient
 				if (!this.expectedClose)
 				{
 					const detail = this.stderr.trim();
-					this.handleExit(agentError(detail || `Codex 已退出（状态 ${code}）`,
-						'WORKSPACE_AGENT_CODEX_EXITED'));
+					this.handleExit(agentError(detail || `Pi 已退出（状态 ${code}）`,
+						'WORKSPACE_AGENT_PI_EXITED'));
 				}
 			});
-
-			await this.requestRaw('initialize', {
-				clientInfo: {name: 'draw_ai', title: 'draw.ai', version: '1.0.0'}
-			});
-			this.send({method: 'initialized', params: {}});
 		})();
 
 		try
@@ -549,14 +656,21 @@ class AppServerClient
 	{
 		if (this.child == null || this.child.stdin.destroyed)
 		{
-			throw agentError('Codex App Server 未连接', 'WORKSPACE_AGENT_NOT_CONNECTED');
+			throw agentError('Pi 未连接', 'WORKSPACE_AGENT_NOT_CONNECTED');
 		}
 
 		this.child.stdin.write(`${JSON.stringify(message)}\n`);
 	}
 
-	requestRaw(method, params, timeoutMs = RPC_TIMEOUT_MS)
+	async request(type, params = {}, timeoutMs = RPC_TIMEOUT_MS)
 	{
+		await this.start();
+
+		if (this.child == null || this.child.stdin.destroyed)
+		{
+			throw this.exitError || agentError('Pi 未连接', 'WORKSPACE_AGENT_NOT_CONNECTED');
+		}
+
 		const id = `draw-ai-${++this.nextId}`;
 
 		return new Promise((resolve, reject) =>
@@ -564,32 +678,26 @@ class AppServerClient
 			const timer = setTimeout(() =>
 			{
 				this.pending.delete(id);
-				reject(agentError(`Codex 请求超时：${method}`, 'WORKSPACE_AGENT_RPC_TIMEOUT'));
+				reject(agentError(`Pi 请求超时：${type}`, 'WORKSPACE_AGENT_RPC_TIMEOUT'));
 			}, timeoutMs);
 			this.pending.set(id, {resolve, reject, timer});
 
 			try
 			{
-				this.send({method, id, params});
+				this.send({id, type, ...params});
 			}
 			catch (error)
 			{
 				clearTimeout(timer);
 				this.pending.delete(id);
-				reject(error);
+				reject(this.exitError || error);
 			}
 		});
 	}
 
-	async request(method, params, timeoutMs)
+	respond(payload)
 	{
-		await this.start();
-		return this.requestRaw(method, params, timeoutMs);
-	}
-
-	respond(id, result, error)
-	{
-		this.send(error == null ? {id, result} : {id, error});
+		this.send({type: 'extension_ui_response', ...payload});
 	}
 
 	handleLine(line)
@@ -599,39 +707,38 @@ class AppServerClient
 		try { message = JSON.parse(line); }
 		catch (error) { return; }
 
-		const pending = this.pending.get(message.id);
-
-		if (pending != null)
+		if (message.type === 'extension_ui_request')
 		{
-			clearTimeout(pending.timer);
-			this.pending.delete(message.id);
-			if (message.error != null)
-			{
-				const error = agentError(message.error.message || 'Codex App Server 请求失败',
-					'WORKSPACE_AGENT_RPC_FAILED');
-				error.rpcCode = message.error.code;
-				pending.reject(error);
-			}
-			else pending.resolve(message.result);
+			this.onUiRequest?.(message);
 			return;
 		}
 
-		if (message.method != null && message.id != null)
+		if (message.type === 'response')
 		{
-			this.onServerRequest?.(message);
+			const pending = this.pending.get(message.id);
+			if (pending == null) return;
+			clearTimeout(pending.timer);
+			this.pending.delete(message.id);
+
+			if (message.success === false)
+			{
+				pending.reject(agentError(message.error || 'Pi 请求失败', 'WORKSPACE_AGENT_RPC_FAILED'));
+			}
+			else pending.resolve(message.data);
+			return;
 		}
-		else if (message.method != null)
-		{
-			this.onNotification?.(message);
-		}
+
+		this.onEvent?.(message);
 	}
 
 	handleExit(error)
 	{
 		if (this.exitHandled) return;
 		this.exitHandled = true;
-		const failure = error instanceof Error ? error : agentError(String(error),
-			'WORKSPACE_AGENT_CODEX_EXITED');
+		const failure = error instanceof Error ?
+			(error.code === 'ENOENT' ?
+				agentError(`无法启动 Pi：${error.message}`, 'WORKSPACE_AGENT_PI_NOT_FOUND') : error) :
+			agentError(String(error), 'WORKSPACE_AGENT_PI_EXITED');
 		for (const pending of this.pending.values())
 		{
 			clearTimeout(pending.timer);
@@ -639,6 +746,7 @@ class AppServerClient
 		}
 		this.pending.clear();
 		this.child = null;
+		this.exitError = failure;
 		this.onExit?.(failure);
 	}
 
@@ -648,7 +756,7 @@ class AppServerClient
 		for (const pending of this.pending.values())
 		{
 			clearTimeout(pending.timer);
-			pending.reject(agentError('Codex 已停止', 'WORKSPACE_AGENT_STOPPED'));
+			pending.reject(agentError('Pi 已停止', 'WORKSPACE_AGENT_STOPPED'));
 		}
 		this.pending.clear();
 		try { this.child?.stdin.end(); } catch (error) {}
@@ -708,10 +816,42 @@ function buildTurnPrompt(prompt, relativeFilePath, context)
 	].join('\n\n');
 }
 
-function commandSummary(item)
+function assistantText(message)
 {
-	const command = Array.isArray(item?.command) ? item.command.join(' ') : item?.command;
-	return redactSensitive(command || item?.aggregatedOutput || '正在运行命令');
+	const content = message?.content;
+
+	if (typeof content === 'string') return content;
+	if (!Array.isArray(content)) return '';
+
+	return content.filter(part => part?.type === 'text' && typeof part.text === 'string')
+		.map(part => part.text).join('');
+}
+
+function toolActivity(message, phase)
+{
+	const name = String(message?.toolName || '');
+	const args = message?.args != null && typeof message.args === 'object' ? message.args : {};
+	const running = phase === 'start';
+
+	if (name === 'bash')
+	{
+		const command = redactSensitive(args.command || '正在运行命令');
+		return {kind: 'command', label: running ? command : `命令执行完成：${command}`};
+	}
+
+	if (name === 'edit' || name === 'write')
+	{
+		const file = path.basename(String(args.path || '图文件'));
+		return {kind: 'file', label: running ? `正在修改 ${file}` : `已修改 ${file}`};
+	}
+
+	if (name === 'read' || name === 'grep' || name === 'find' || name === 'ls')
+	{
+		const file = args.path != null ? path.basename(String(args.path)) : '工作区';
+		return {kind: 'read', label: running ? `正在读取 ${file}` : `已读取 ${file}`};
+	}
+
+	return {kind: 'command', label: running ? `正在执行 ${name || '工具'}` : `已完成 ${name || '工具'}`};
 }
 
 function changeSummary(changes)
@@ -719,10 +859,20 @@ function changeSummary(changes)
 	return changes.map(change => ({path: change.path, kind: change.kind}));
 }
 
+function uiRequestDetail(request)
+{
+	const title = typeof request.title === 'string' ? request.title.trim() : '';
+	const message = typeof request.message === 'string' ? request.message.trim() : '';
+	const placeholder = typeof request.placeholder === 'string' ? request.placeholder.trim() : '';
+	const detail = [title, message, placeholder !== '' && request.method === 'input' ? placeholder : '']
+		.filter(part => part !== '').join('\n');
+	return redactSensitive(detail || 'Pi 请求继续执行');
+}
+
 export function createWorkspaceAgentService({
 	store,
 	getWorkspaceRoot,
-	getCodexProfile,
+	getPiProfile,
 	stateDir,
 	spawnImpl = nodeSpawn
 })
@@ -732,8 +882,10 @@ export function createWorkspaceAgentService({
 		throw new Error('Workspace Agent state directory is required');
 	}
 
+	const sessionDirectory = path.join(stateDir, PI_SESSION_DIRECTORY);
 	let client = null;
 	let clientKey = null;
+	let verifiedKey = null;
 	let active = null;
 	let approvalCounter = 0;
 	const pendingApprovals = new Map();
@@ -743,102 +895,125 @@ export function createWorkspaceAgentService({
 		active?.onProgress?.({type, ...data});
 	}
 
-	function finishActive(turn)
+	function settleActive(stopReason, errorMessage)
 	{
 		if (active == null || active.finished) return;
 		active.finished = true;
-		active.resolveTurn(turn);
+
+		if (stopReason === 'error')
+		{
+			active.rejectTurn(agentError(errorMessage || 'Pi 执行失败', 'WORKSPACE_AGENT_TURN_FAILED'));
+		}
+		else if (stopReason === 'aborted')
+		{
+			active.rejectTurn(agentError('任务已停止，未完成的修改已经撤回', 'WORKSPACE_AGENT_INTERRUPTED'));
+		}
+		else active.resolveTurn();
 	}
 
-	function handleNotification(message)
+	function handleEvent(message)
 	{
-		if (active == null) return;
-		const params = message.params || {};
-		if (params.threadId != null && params.threadId !== active.threadId) return;
+		if (active == null || active.finished) return;
 
-		if (message.method === 'turn/started')
+		if (message.type === 'agent_start')
 		{
-			active.turnId = params.turn?.id || active.turnId;
-			progress('status', {phase: 'working', label: 'Codex 正在处理图纸'});
+			progress('status', {phase: 'working', label: 'Pi 正在处理图纸'});
 		}
-		else if (message.method === 'item/agentMessage/delta')
+		else if (message.type === 'message_update')
 		{
-			const delta = typeof params.delta === 'string' ? params.delta : '';
-			active.streamed += delta;
-			progress('message-delta', {delta});
-		}
-		else if (message.method === 'item/reasoning/summaryTextDelta')
-		{
-			progress('reasoning', {delta: String(params.delta || '').slice(0, 1200)});
-		}
-		else if (message.method === 'item/started')
-		{
-			const item = params.item || {};
+			const event = message.assistantMessageEvent || {};
 
-			if (item.type === 'commandExecution')
+			if (event.type === 'text_delta')
 			{
-				progress('activity', {id: item.id, status: 'running', kind: 'command',
-					label: commandSummary(item)});
+				const delta = typeof event.delta === 'string' ? event.delta : '';
+				active.streamed += delta;
+				progress('message-delta', {delta});
 			}
-			else if (item.type === 'fileChange')
+			else if (event.type === 'thinking_delta')
 			{
-				progress('activity', {id: item.id, status: 'running', kind: 'file',
-					label: '正在修改图文件'});
+				progress('reasoning', {delta: String(event.delta || '').slice(0, 1200)});
 			}
 		}
-		else if (message.method === 'item/completed')
+		else if (message.type === 'message_end')
 		{
-			const item = params.item || {};
+			const item = message.message;
 
-			if (item.type === 'agentMessage' && typeof item.text === 'string')
+			if (item?.role === 'assistant')
 			{
-				active.messages.push({text: item.text, phase: item.phase});
-			}
-			else if (item.type === 'commandExecution')
-			{
-				progress('activity', {id: item.id, status: item.status === 'failed' ? 'failed' : 'done',
-					kind: 'command', label: commandSummary(item)});
-			}
-			else if (item.type === 'fileChange')
-			{
-				progress('activity', {id: item.id, status: item.status === 'failed' ? 'failed' : 'done',
-					kind: 'file', label: '图文件修改完成'});
+				active.lastAssistant = assistantText(item);
+				active.stopReason = item.stopReason;
+				active.errorMessage = item.errorMessage;
 			}
 		}
-		else if (message.method === 'turn/completed')
+		else if (message.type === 'tool_execution_start')
 		{
-			finishActive(params.turn || {status: 'failed', error: {message: 'Codex 未返回结果'}});
+			// Pi omits args on tool_execution_end, so remember them for the summary.
+			active.tools.set(message.toolCallId, {toolName: message.toolName, args: message.args});
+			progress('activity', {id: message.toolCallId, status: 'running',
+				...toolActivity(message, 'start')});
+		}
+		else if (message.type === 'tool_execution_end')
+		{
+			const started = active.tools.get(message.toolCallId);
+			active.tools.delete(message.toolCallId);
+			const item = {toolName: message.toolName || started?.toolName,
+				args: message.args != null ? message.args : started?.args};
+			progress('activity', {id: message.toolCallId, status: message.isError ? 'failed' : 'done',
+				...toolActivity(item, 'end')});
+		}
+		else if (message.type === 'agent_settled')
+		{
+			settleActive(active.stopReason, active.errorMessage);
 		}
 	}
 
-	function handleServerRequest(message)
+	function handleUiRequest(request)
 	{
-		const supported = new Map([
-			['item/commandExecution/requestApproval', 'command'],
-			['item/fileChange/requestApproval', 'file'],
-			['item/permissions/requestApproval', 'permissions']
-		]);
-		const type = supported.get(message.method);
-
-		if (active == null || type == null)
+		if (!PI_DIALOG_METHODS.has(request.method))
 		{
-			client?.respond(message.id, null, {code: -32601, message: 'Unsupported request'});
+			// notify/setStatus/setWidget/setTitle/set_editor_text are fire-and-forget.
+			return;
+		}
+
+		if (active == null || active.finished)
+		{
+			client?.respond({id: request.id, cancelled: true});
 			return;
 		}
 
 		const requestId = `approval-${++approvalCounter}`;
-		const params = message.params || {};
-		pendingApprovals.set(requestId, {rpcId: message.id, type, params});
-		const detail = type === 'command' ? redactSensitive(params.command || params.reason || '') :
-			(type === 'file' ? String(params.grantRoot || params.reason || '请求额外文件写入权限') :
-				String(params.reason || '请求额外权限'));
-		progress('approval', {approval: {id: requestId, type, detail,
-			allowSession: type !== 'permissions'}});
+		pendingApprovals.set(requestId, {uiId: request.id, method: request.method});
+		const approval = {id: requestId, type: request.method, detail: uiRequestDetail(request)};
+
+		if (request.method === 'select' && Array.isArray(request.options))
+		{
+			approval.options = request.options.slice(0, 12).map(option => String(option).slice(0, 200));
+		}
+
+		if (request.method === 'input' || request.method === 'editor')
+		{
+			approval.valueRequired = true;
+			if (typeof request.prefill === 'string') approval.prefill = request.prefill.slice(0, 4000);
+		}
+
+		progress('approval', {approval});
+	}
+
+	function cancelPendingApprovals()
+	{
+		for (const pending of pendingApprovals.values())
+		{
+			try { client?.respond({id: pending.uiId, cancelled: true}); }
+			catch (error) {}
+		}
+
+		pendingApprovals.clear();
 	}
 
 	function handleClientExit(error)
 	{
 		pendingApprovals.clear();
+		verifiedKey = null;
 
 		if (active != null && !active.finished)
 		{
@@ -847,64 +1022,43 @@ export function createWorkspaceAgentService({
 		}
 	}
 
-	async function ensureClient(root, profile)
+	async function ensureClient(root, profile, sessionId, expectResume)
 	{
-		const command = cleanText(profile?.command || 'codex', 'Codex 命令', 2048);
-		const key = `${command}\0${root}`;
+		const command = cleanText(profile?.command || DEFAULT_PI_COMMAND, 'Pi 命令', 2048);
+		const model = typeof profile?.model === 'string' ? profile.model.trim() : '';
+		const key = [command, root, sessionId, model].join('\0');
 
 		if (client == null || clientKey !== key)
 		{
 			client?.stop();
-				client = new AppServerClient({command, cwd: root, spawnImpl,
-					onNotification: handleNotification, onServerRequest: handleServerRequest,
-					onExit: handleClientExit});
+			await fs.mkdir(sessionDirectory, {recursive: true});
+			client = new PiRpcClient({command, cwd: root, sessionDirectory, sessionId, model, spawnImpl,
+				onEvent: handleEvent, onUiRequest: handleUiRequest, onExit: handleClientExit});
 			clientKey = key;
+			verifiedKey = null;
 		}
 
 		await client.start();
+
+		if (verifiedKey !== key)
+		{
+			const state = await client.request('get_state');
+
+			if (state?.sessionId !== sessionId)
+			{
+				throw agentError('Pi 返回了不一致的对话标识', 'WORKSPACE_AGENT_THREAD_RESUME_FAILED');
+			}
+
+			if (expectResume && Number(state?.messageCount || 0) === 0)
+			{
+				throw agentError('无法继续当前 Agent 对话：Pi 找不到已保存的会话。请重试，或明确新建对话',
+					'WORKSPACE_AGENT_THREAD_RESUME_FAILED');
+			}
+
+			verifiedKey = key;
+		}
+
 		return client;
-	}
-
-	async function ensureThread(root, session, profile)
-	{
-		const params = {
-			cwd: root,
-			ephemeral: false,
-			sandbox: 'workspace-write',
-			approvalPolicy: 'on-request',
-			approvalsReviewer: 'user',
-			developerInstructions: workspaceDeveloperInstructions(),
-			threadSource: 'draw.ai'
-		};
-		if (typeof profile?.model === 'string' && profile.model !== '') params.model = profile.model;
-
-		if (session.threadId != null)
-		{
-			try
-			{
-				const resumed = await client.request('thread/resume', {threadId: session.threadId,
-					cwd: root, sandbox: 'workspace-write', approvalPolicy: 'on-request',
-					approvalsReviewer: 'user', developerInstructions: workspaceDeveloperInstructions(),
-					...(params.model != null ? {model: params.model} : {})});
-				if (resumed?.thread?.id === session.threadId) return session.threadId;
-			}
-			catch (error)
-			{
-				session.threadId = null;
-			}
-		}
-
-		const started = await client.request('thread/start', params);
-		const threadId = started?.thread?.id;
-
-		if (typeof threadId !== 'string' || threadId === '')
-		{
-			throw agentError('Codex 没有创建对话', 'WORKSPACE_AGENT_THREAD_FAILED');
-		}
-
-		session.threadId = threadId;
-		writeSession(store, session);
-		return threadId;
 	}
 
 	async function rollbackFailedTurn(checkpoint)
@@ -919,15 +1073,15 @@ export function createWorkspaceAgentService({
 	return {
 		async getState()
 		{
-			const profile = typeof getCodexProfile === 'function' ? getCodexProfile() :
-				{command: 'codex', model: ''};
+			const profile = typeof getPiProfile === 'function' ? getPiProfile() :
+				{command: DEFAULT_PI_COMMAND, model: ''};
 			let root = null;
 
 			try { root = await resolveWorkspaceRoot(getWorkspaceRoot); }
 			catch (error)
 			{
-				return {configured: false, busy: false, threadId: null, messages: [], canRollback: false,
-					command: profile.command || 'codex', model: profile.model || ''};
+				return {configured: false, busy: false, sessionId: null, messages: [], canRollback: false,
+					command: profile.command || DEFAULT_PI_COMMAND, model: profile.model || ''};
 			}
 
 			const session = readSession(store, root);
@@ -935,32 +1089,32 @@ export function createWorkspaceAgentService({
 				configured: true,
 				root,
 				busy: active != null,
-				threadId: session.threadId,
+				sessionId: session.sessionId,
 				messages: session.messages,
 				canRollback: session.lastCheckpoint != null,
-				command: profile?.command || 'codex',
+				command: profile?.command || DEFAULT_PI_COMMAND,
 				model: profile?.model || ''
 			};
 		},
 
 		getProfile()
 		{
-			const profile = typeof getCodexProfile === 'function' ? getCodexProfile() : {};
-			return {command: profile.command || 'codex', model: profile.model || ''};
+			const profile = typeof getPiProfile === 'function' ? getPiProfile() : {};
+			return {command: profile.command || DEFAULT_PI_COMMAND, model: profile.model || ''};
 		},
 
 		setProfile(input)
 		{
 			if (active != null) throw agentError('请先停止当前任务，再修改模型配置', 'WORKSPACE_AGENT_BUSY');
 			if (store == null) throw agentError('无法保存模型配置', 'WORKSPACE_AGENT_CONFIG_ERROR');
-			const current = typeof getCodexProfile === 'function' ? getCodexProfile() :
-				{command: 'codex', model: ''};
+			const current = typeof getPiProfile === 'function' ? getPiProfile() :
+				{command: DEFAULT_PI_COMMAND, model: ''};
 			const source = input != null && typeof input === 'object' ? input : {};
-			const profile = normalizeWorkspaceAgentCodexProfile({
+			const profile = normalizeWorkspaceAgentPiProfile({
 				command: source.command == null ? current.command : source.command,
 				model: source.model == null ? current.model : source.model
 			});
-			store.set(CODEX_PROFILE_STORE_KEY, profile);
+			store.set(PI_PROFILE_STORE_KEY, profile);
 			return profile;
 		},
 
@@ -978,7 +1132,10 @@ export function createWorkspaceAgentService({
 			const filePath = await resolveDiagramPath(root, input.filePath);
 			const relativeFilePath = normalizeRelativePath(path.relative(root, filePath));
 			const session = readSession(store, root);
-			const profile = typeof getCodexProfile === 'function' ? getCodexProfile() : {};
+			const profile = typeof getPiProfile === 'function' ? getPiProfile() : {};
+			const expectResume = session.sessionId != null && session.messages.some(message =>
+				message.role === 'assistant' && message.status === 'completed');
+			const sessionId = session.sessionId != null ? session.sessionId : crypto.randomUUID();
 			let checkpoint;
 
 			onProgress?.({type: 'status', phase: 'checkpoint', label: '正在建立安全检查点'});
@@ -987,8 +1144,10 @@ export function createWorkspaceAgentService({
 
 			try
 			{
-				await ensureClient(root, profile);
-				const threadId = await ensureThread(root, session, profile);
+				await ensureClient(root, profile, sessionId, expectResume);
+				session.sessionId = sessionId;
+				writeSession(store, session);
+
 				let resolveTurn;
 				let rejectTurn;
 				const turnPromise = new Promise((resolve, reject) =>
@@ -997,41 +1156,46 @@ export function createWorkspaceAgentService({
 					rejectTurn = reject;
 				});
 				turnPromise.catch(() => {});
-				active = {root, threadId, turnId: null, onProgress, resolveTurn, rejectTurn,
-					finished: false, streamed: '', messages: [], session, relativeFilePath};
-				onProgress?.({type: 'status', phase: 'connecting', label: '正在连接 Codex'});
-
-				const started = await client.request('turn/start', {
-					threadId,
-					cwd: root,
-					approvalPolicy: 'on-request',
-					input: [{type: 'text', text: buildTurnPrompt(prompt, relativeFilePath, input.context)}]
-				});
-				active.turnId = started?.turn?.id || active.turnId;
+				active = {root, sessionId, onProgress, resolveTurn, rejectTurn, finished: false,
+					streamed: '', lastAssistant: '', stopReason: null, errorMessage: null,
+					tools: new Map(), session, relativeFilePath};
+				onProgress?.({type: 'status', phase: 'connecting', label: '正在连接 Pi'});
 
 				const timeout = setTimeout(() =>
 				{
 					if (active != null && !active.finished)
 					{
 						active.finished = true;
-						active.rejectTurn(agentError('Codex 执行超时', 'WORKSPACE_AGENT_TURN_TIMEOUT'));
-						client.request('turn/interrupt', {threadId, turnId: active.turnId}).catch(() => {});
+						active.rejectTurn(agentError('Pi 执行超时', 'WORKSPACE_AGENT_TURN_TIMEOUT'));
+						cancelPendingApprovals();
+						client.request('abort', {}, RPC_TIMEOUT_MS).catch(() => {});
 					}
 				}, TURN_TIMEOUT_MS);
 
-				let turn;
+				let turnError = null;
 
-				try { turn = await turnPromise; }
-				finally { clearTimeout(timeout); }
+				try
+				{
+					await client.request('prompt', {
+						message: buildTurnPrompt(prompt, relativeFilePath, input.context)
+					});
+					await turnPromise;
+				}
+				catch (error)
+				{
+					turnError = error;
+				}
+				finally
+				{
+					clearTimeout(timeout);
+				}
 
-				if (turn.status !== 'completed')
+				if (turnError != null)
 				{
 					await rollbackFailedTurn(checkpoint);
-					const message = turn.error?.message || (turn.status === 'interrupted' ?
-						'任务已停止，未完成的修改已经撤回' : 'Codex 执行失败');
-					appendMessage(store, session, {role: 'assistant', text: message, status: turn.status});
-					throw agentError(message, turn.status === 'interrupted' ?
-						'WORKSPACE_AGENT_INTERRUPTED' : 'WORKSPACE_AGENT_TURN_FAILED');
+					appendMessage(store, session, {role: 'assistant', text: turnError.message,
+						status: turnError.code === 'WORKSPACE_AGENT_INTERRUPTED' ? 'interrupted' : 'failed'});
+					throw turnError;
 				}
 
 				onProgress?.({type: 'status', phase: 'validating', label: '正在校验图文件'});
@@ -1041,7 +1205,7 @@ export function createWorkspaceAgentService({
 				if (changes.some(change => change.kind === 'deleted'))
 				{
 					await restoreCheckpoint(checkpoint, changes);
-					throw agentError('Codex 删除了图文件，安全策略已自动撤回本轮修改',
+					throw agentError('Pi 删除了图文件，安全策略已自动撤回本轮修改',
 						'WORKSPACE_AGENT_UNSAFE_CHANGE');
 				}
 
@@ -1071,16 +1235,15 @@ export function createWorkspaceAgentService({
 					await fs.rm(checkpoint.directory, {recursive: true, force: true});
 				}
 
-				const finalMessage = [...active.messages].reverse().find(item =>
-					item.phase === 'final_answer')?.text || active.messages.at(-1)?.text ||
-					active.streamed || (changes.length > 0 ? '图纸修改完成' : '本轮没有修改图文件');
+				const finalMessage = active.lastAssistant || active.streamed ||
+					(changes.length > 0 ? '图纸修改完成' : '本轮没有修改图文件');
 				appendMessage(store, session, {role: 'assistant', text: finalMessage,
 					status: 'completed', changes: changeSummary(changes), checkpointId: checkpointReference?.id || null});
 				writeSession(store, session);
 				onProgress?.({type: 'status', phase: 'completed', label: '修改与校验完成',
 					changes: changeSummary(changes)});
 
-				return {reply: finalMessage, changes: changeSummary(changes), threadId,
+				return {reply: finalMessage, changes: changeSummary(changes), sessionId,
 					canRollback: checkpointReference != null};
 			}
 			catch (error)
@@ -1096,7 +1259,7 @@ export function createWorkspaceAgentService({
 			finally
 			{
 				active = null;
-				pendingApprovals.clear();
+				cancelPendingApprovals();
 			}
 		},
 
@@ -1112,19 +1275,25 @@ export function createWorkspaceAgentService({
 			}
 
 			const decision = cleanText(input.decision, '审批决定', 40);
-			const allowed = new Set(['accept', 'acceptForSession', 'decline', 'cancel']);
+			const allowed = new Set(['accept', 'decline', 'cancel']);
 			if (!allowed.has(decision)) throw agentError('审批决定无效', 'WORKSPACE_AGENT_INVALID_INPUT');
 
-			if (pending.type === 'permissions')
+			if (decision === 'cancel')
 			{
-				client.respond(pending.rpcId, decision === 'accept' || decision === 'acceptForSession' ? {
-					permissions: pending.params.permissions || {},
-					scope: decision === 'acceptForSession' ? 'session' : 'turn'
-				} : {permissions: {}, scope: 'turn'});
+				client.respond({id: pending.uiId, cancelled: true});
+			}
+			else if (pending.method === 'confirm')
+			{
+				client.respond({id: pending.uiId, confirmed: decision === 'accept'});
+			}
+			else if (decision === 'accept')
+			{
+				const value = typeof input.value === 'string' ? input.value : '';
+				client.respond({id: pending.uiId, value});
 			}
 			else
 			{
-				client.respond(pending.rpcId, {decision});
+				client.respond({id: pending.uiId, cancelled: true});
 			}
 
 			pendingApprovals.delete(requestId);
@@ -1134,14 +1303,13 @@ export function createWorkspaceAgentService({
 
 		async steer(text)
 		{
-			if (active == null || active.turnId == null)
+			if (active == null)
 			{
 				throw agentError('当前没有正在执行的 Agent 任务', 'WORKSPACE_AGENT_NOT_BUSY');
 			}
 
 			const prompt = cleanText(text, '补充要求', 10000);
-			await client.request('turn/steer', {threadId: active.threadId,
-				expectedTurnId: active.turnId, input: [{type: 'text', text: prompt}]});
+			await client.request('steer', {message: prompt});
 			appendMessage(store, active.session, {role: 'user', text: prompt,
 				filePath: active.relativeFilePath, steered: true});
 			progress('steered', {text: prompt});
@@ -1150,8 +1318,9 @@ export function createWorkspaceAgentService({
 
 		async interrupt()
 		{
-			if (active == null || active.turnId == null) return false;
-			await client.request('turn/interrupt', {threadId: active.threadId, turnId: active.turnId});
+			if (active == null) return false;
+			cancelPendingApprovals();
+			await client.request('abort', {}, TURN_TIMEOUT_MS);
 			return true;
 		},
 
@@ -1160,10 +1329,10 @@ export function createWorkspaceAgentService({
 			if (active != null) throw agentError('请先停止当前任务', 'WORKSPACE_AGENT_BUSY');
 			const root = await resolveWorkspaceRoot(getWorkspaceRoot);
 			const session = readSession(store, root);
-			session.threadId = null;
+			session.sessionId = null;
 			session.messages = [];
 			writeSession(store, session);
-			return {threadId: null, messages: [], canRollback: session.lastCheckpoint != null};
+			return {sessionId: null, messages: [], canRollback: session.lastCheckpoint != null};
 		},
 
 		async rollback()
@@ -1206,6 +1375,7 @@ export function createWorkspaceAgentService({
 			client?.stop();
 			client = null;
 			clientKey = null;
+			verifiedKey = null;
 		}
 	};
 }

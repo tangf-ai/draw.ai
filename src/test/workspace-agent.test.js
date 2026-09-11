@@ -8,7 +8,7 @@ import test from 'node:test';
 import {
 	buildLocalEngineEnvironment,
 	createWorkspaceAgentService,
-	readWorkspaceAgentCodexProfile,
+	readWorkspaceAgentPiProfile,
 	validateDrawioFile
 } from '../main/workspace-agent.js';
 
@@ -22,6 +22,12 @@ class MemoryStore
 	set(key, value) { this.values.set(key, structuredClone(value)); }
 }
 
+function argumentValue(args, name)
+{
+	const index = args.indexOf(name);
+	return index === -1 ? null : args[index + 1];
+}
+
 test('desktop Agent environment can find a CLI installed outside the app bundle', () =>
 {
 	const env = buildLocalEngineEnvironment({HOME: '/Users/example', PATH: '/usr/bin'}, 'darwin');
@@ -32,44 +38,58 @@ test('desktop Agent environment can find a CLI installed outside the app bundle'
 	assert.ok(entries.includes('/usr/bin'));
 });
 
-test('Workspace Agent keeps an existing Codex profile without the removed assistant settings', () =>
+test('desktop Agent environment finds Pi installed by a node version manager', () =>
 {
-	const current = new MemoryStore();
-	current.set('workspaceAgent.codexProfile', {command: '/opt/codex', model: 'gpt-test'});
-	assert.deepEqual(readWorkspaceAgentCodexProfile(current),
-		{command: '/opt/codex', model: 'gpt-test'});
+	const nvmRoot = path.join('/home/dev', '.nvm', 'versions', 'node');
+	const listDirectories = directory => directory === nvmRoot ? ['v9.0.0', 'v24.11.0'] : [];
+	const env = buildLocalEngineEnvironment({HOME: '/home/dev', PATH: '/usr/bin'}, 'linux',
+		listDirectories);
+	const entries = env.PATH.split(path.delimiter);
+	const current = path.join(nvmRoot, 'v24.11.0', 'bin');
+	const older = path.join(nvmRoot, 'v9.0.0', 'bin');
 
-	const legacy = new MemoryStore();
-	legacy.set('aiAssistant.engineConfigs', {codex: {command: '/usr/local/bin/codex', model: 'legacy-model'}});
-	assert.deepEqual(readWorkspaceAgentCodexProfile(legacy),
-		{command: '/usr/local/bin/codex', model: 'legacy-model'});
-	assert.deepEqual(readWorkspaceAgentCodexProfile(new MemoryStore()),
-		{command: 'codex', model: ''});
+	assert.ok(entries.includes(current), 'nvm versions are searched');
+	assert.ok(entries.includes(older));
+	assert.ok(entries.indexOf(current) < entries.indexOf(older), 'the newest node version wins');
+	assert.ok(entries.includes(path.join('/home/dev', '.bun', 'bin')));
+	assert.ok(entries.includes(path.join('/home/dev', '.local', 'share', 'fnm', 'aliases',
+		'default', 'bin')));
 });
 
-test('Workspace Agent persists validated model configuration for the next turn', async () =>
+test('Workspace Agent defaults to the Pi CLI profile', () =>
+{
+	const store = new MemoryStore();
+	store.set('workspaceAgent.piProfile', {command: '/opt/pi', model: 'deepseek-v4-flash'});
+	assert.deepEqual(readWorkspaceAgentPiProfile(store),
+		{command: '/opt/pi', model: 'deepseek-v4-flash'});
+	assert.deepEqual(readWorkspaceAgentPiProfile(new MemoryStore()),
+		{command: 'pi', model: ''});
+	assert.deepEqual(readWorkspaceAgentPiProfile(undefined), {command: 'pi', model: ''});
+});
+
+test('Workspace Agent persists validated Pi model configuration for the next turn', async () =>
 {
 	const files = await fixture();
 	const store = new MemoryStore();
 	const service = createWorkspaceAgentService({
 		store,
 		getWorkspaceRoot: () => files.root,
-		getCodexProfile: () => readWorkspaceAgentCodexProfile(store),
+		getPiProfile: () => readWorkspaceAgentPiProfile(store),
 		stateDir: files.stateDir,
-		spawnImpl: () => { throw new Error('Codex should not start while testing configuration'); }
+		spawnImpl: () => { throw new Error('Pi should not start while testing configuration'); }
 	});
 
 	try
 	{
-		assert.deepEqual(service.getProfile(), {command: 'codex', model: ''});
-		assert.deepEqual(service.setProfile({command: '/opt/codex', model: 'gpt-test'}),
-			{command: '/opt/codex', model: 'gpt-test'});
-		assert.deepEqual(service.getProfile(), {command: '/opt/codex', model: 'gpt-test'});
-		assert.deepEqual(store.get('workspaceAgent.codexProfile'),
-			{command: '/opt/codex', model: 'gpt-test'});
-		assert.throws(() => service.setProfile({command: '/opt/codex\n--unsafe'}),
+		assert.deepEqual(service.getProfile(), {command: 'pi', model: ''});
+		assert.deepEqual(service.setProfile({command: '/opt/pi', model: 'deepseek-v4-flash'}),
+			{command: '/opt/pi', model: 'deepseek-v4-flash'});
+		assert.deepEqual(service.getProfile(), {command: '/opt/pi', model: 'deepseek-v4-flash'});
+		assert.deepEqual(store.get('workspaceAgent.piProfile'),
+			{command: '/opt/pi', model: 'deepseek-v4-flash'});
+		assert.throws(() => service.setProfile({command: '/opt/pi\n--unsafe'}),
 			error => error.code === 'WORKSPACE_AGENT_INVALID_INPUT');
-		assert.throws(() => service.setProfile({command: '/opt/codex', model: 'x'.repeat(201)}),
+		assert.throws(() => service.setProfile({command: '/opt/pi', model: 'x'.repeat(201)}),
 			error => error.code === 'WORKSPACE_AGENT_INVALID_INPUT');
 	}
 	finally
@@ -79,15 +99,17 @@ test('Workspace Agent persists validated model configuration for the next turn',
 	}
 });
 
-function fakeAppServer({onTurn, onClientResponse} = {})
+// Minimal Pi RPC server: JSONL commands on stdin, responses and events on stdout.
+function fakePiRpc({onPrompt, onUiResponse, onGetState} = {})
 {
 	const requests = [];
+	const spawns = [];
 	let spawnCount = 0;
-	let turnCount = 0;
 
-	const spawnImpl = () =>
+	const spawnImpl = (command, args) =>
 	{
 		spawnCount++;
+		spawns.push({command, args});
 		const child = new EventEmitter();
 		child.stdin = new PassThrough();
 		child.stdout = new PassThrough();
@@ -96,6 +118,8 @@ function fakeAppServer({onTurn, onClientResponse} = {})
 		let pending = '';
 
 		const send = message => child.stdout.write(`${JSON.stringify(message)}\n`);
+		const succeed = (request, data) => send({id: request.id, type: 'response',
+			command: request.type, success: true, data});
 
 		child.stdin.on('data', chunk =>
 		{
@@ -109,55 +133,42 @@ function fakeAppServer({onTurn, onClientResponse} = {})
 				const request = JSON.parse(line);
 				requests.push(request);
 
-				if (request.method === 'initialize')
+				if (request.type === 'get_state')
 				{
-					send({id: request.id, result: {userAgent: 'test'}});
+					const state = onGetState ? onGetState({request, args, spawnCount}) :
+						{sessionId: argumentValue(args, '--session-id'), messageCount: 1};
+					succeed(request, state);
 				}
-				else if (request.method === 'thread/start')
+				else if (request.type === 'prompt')
 				{
-					send({id: request.id, result: {thread: {id: 'thread-1'}}});
-				}
-				else if (request.method === 'thread/resume')
-				{
-					send({id: request.id, result: {thread: {id: request.params.threadId}}});
-				}
-				else if (request.method === 'turn/start')
-				{
-					turnCount++;
-					const turnId = `turn-${turnCount}`;
-					send({id: request.id, result: {turn: {id: turnId, status: 'inProgress', items: []}}});
+					succeed(request, {});
 					queueMicrotask(async () =>
 					{
-						if (onTurn) await onTurn({request, send, turnId, turnCount, child});
+						if (onPrompt) await onPrompt({request, send, args, child, spawnCount});
 						else
 						{
-							send({method: 'item/completed', params: {threadId: 'thread-1', turnId,
-								item: {id: `message-${turnCount}`, type: 'agentMessage',
-									phase: 'final_answer', text: `完成 ${turnCount}`}}});
-							send({method: 'turn/completed', params: {threadId: 'thread-1',
-								turn: {id: turnId, status: 'completed', items: []}}});
+							send({type: 'message_end', message: {role: 'assistant',
+								content: [{type: 'text', text: '完成'}], stopReason: 'stop'}});
+							send({type: 'agent_settled'});
 						}
 					});
 				}
-					else if (request.method === 'turn/interrupt')
-					{
-						send({id: request.id, result: {}});
-					}
-					else if (request.method === 'turn/steer')
-					{
-						send({id: request.id, result: {}});
-					}
-				else if (request.id != null && request.method == null && onClientResponse)
+				else if (request.type === 'extension_ui_response')
 				{
-					onClientResponse({request, send});
+					onUiResponse?.({request, send, child});
 				}
+				else if (request.type === 'abort' || request.type === 'steer')
+				{
+					succeed(request, {});
+				}
+				else succeed(request, {});
 			}
 		});
 
 		return child;
 	};
 
-	return {spawnImpl, requests, get spawnCount() { return spawnCount; }};
+	return {spawnImpl, requests, spawns, get spawnCount() { return spawnCount; }};
 }
 
 async function fixture()
@@ -176,38 +187,121 @@ function serviceFor(files, server, store = new MemoryStore())
 	return createWorkspaceAgentService({
 		store,
 		getWorkspaceRoot: () => files.root,
-		getCodexProfile: () => ({command: '/opt/codex', model: 'test-model'}),
+		getPiProfile: () => ({command: '/opt/pi', model: 'test-model'}),
 		stateDir: files.stateDir,
 		spawnImpl: server.spawnImpl
 	});
 }
 
-test('keeps one App Server process and resumes a persistent workspace thread', async () =>
+const PAGE_CONTEXT = {scope: 'page', pageId: 'page-1', pageName: 'Page-1', cells: []};
+
+test('keeps one Pi process and resumes a persistent workspace session', async () =>
 {
 	const files = await fixture();
-	const server = fakeAppServer();
-	const service = serviceFor(files, server);
+	const server = fakePiRpc();
+	const store = new MemoryStore();
+	let service = serviceFor(files, server, store);
 
 	try
 	{
-		await service.chat({prompt: '检查图纸', filePath: files.diagram,
-			context: {scope: 'page', pageId: 'page-1', pageName: 'Page-1', cells: []}});
-		await service.chat({prompt: '再检查一次', filePath: files.diagram,
-			context: {scope: 'page', pageId: 'page-1', pageName: 'Page-1', cells: []}});
+		await service.chat({prompt: '检查图纸', filePath: files.diagram, context: PAGE_CONTEXT});
+		await service.chat({prompt: '再检查一次', filePath: files.diagram, context: PAGE_CONTEXT});
 
-		const threadStart = server.requests.find(request => request.method === 'thread/start');
-		const turnStarts = server.requests.filter(request => request.method === 'turn/start');
+		const prompts = server.requests.filter(request => request.type === 'prompt');
+		const states = server.requests.filter(request => request.type === 'get_state');
 		assert.equal(server.spawnCount, 1);
-		assert.equal(server.requests.filter(request => request.method === 'thread/start').length, 1);
-		assert.equal(server.requests.filter(request => request.method === 'thread/resume').length, 1);
-		assert.equal(threadStart.params.ephemeral, false);
-		assert.equal(threadStart.params.sandbox, 'workspace-write');
-		assert.equal(threadStart.params.approvalPolicy, 'on-request');
-		assert.equal(threadStart.params.cwd, await realpath(files.root));
-		assert.equal(turnStarts.length, 2);
-		assert.equal(Object.prototype.hasOwnProperty.call(turnStarts[0].params, 'outputSchema'), false);
-		assert.match(turnStarts[0].params.input[0].text, /architecture\.drawio/);
-		assert.match(turnStarts[0].params.input[0].text, /DRAW_AI_CONTEXT_JSON/);
+		assert.equal(states.length, 1, 'a live Pi process is verified once');
+		assert.equal(prompts.length, 2);
+		assert.ok(prompts[0].message.includes('architecture.drawio'));
+		assert.ok(prompts[0].message.includes('DRAW_AI_CONTEXT_JSON'));
+
+		const sessionId = (await service.getState()).sessionId;
+		assert.match(sessionId, /^[0-9a-f-]{36}$/);
+		assert.equal(argumentValue(server.spawns[0].args, '--session-id'), sessionId);
+		assert.deepEqual((await service.getState()).messages.map(message => message.text),
+			['检查图纸', '完成', '再检查一次', '完成']);
+
+		service.stop();
+		service = serviceFor(files, server, store);
+		await service.chat({prompt: '应用重启后继续', filePath: files.diagram, context: PAGE_CONTEXT});
+
+		assert.equal(server.spawnCount, 2, 'a resumed session starts a new Pi process');
+		assert.equal((await service.getState()).sessionId, sessionId,
+			'the conversation identifier survives a restart');
+		assert.equal(argumentValue(server.spawns[1].args, '--session-id'), sessionId,
+			'the restarted Pi process resumes the stored session');
+		assert.equal(server.requests.filter(request => request.type === 'get_state').length, 2);
+	}
+	finally
+	{
+		service.stop();
+		await rm(files.temporary, {recursive: true, force: true});
+	}
+});
+
+test('starts Pi in RPC mode with the workspace session and no legacy Codex flags', async () =>
+{
+	const files = await fixture();
+	let capturedArgs = null;
+	let capturedCommand = null;
+	const server = fakePiRpc();
+	const originalSpawn = server.spawnImpl;
+
+	const service = createWorkspaceAgentService({
+		store: new MemoryStore(),
+		getWorkspaceRoot: () => files.root,
+		getPiProfile: () => ({command: '/opt/pi', model: 'm4/gpt-5.6-sol'}),
+		stateDir: files.stateDir,
+		spawnImpl: (command, args, options) =>
+		{
+			capturedCommand = command;
+			capturedArgs = args;
+			return originalSpawn(command, args, options);
+		}
+	});
+
+	try
+	{
+		await service.chat({prompt: '检查图纸', filePath: files.diagram, context: PAGE_CONTEXT});
+		assert.equal(capturedCommand, '/opt/pi');
+		assert.deepEqual(capturedArgs.slice(0, 2), ['--mode', 'rpc']);
+		assert.equal(capturedArgs[capturedArgs.indexOf('--session-dir') + 1],
+			path.join(files.stateDir, 'pi-sessions'));
+		assert.match(argumentValue(capturedArgs, '--session-id'), /^[0-9a-f-]{36}$/);
+		assert.equal(argumentValue(capturedArgs, '--model'), 'm4/gpt-5.6-sol');
+		assert.match(argumentValue(capturedArgs, '--append-system-prompt'), /Workspace Agent/);
+		assert.ok(!capturedArgs.includes('app-server'));
+	}
+	finally
+	{
+		service.stop();
+		await rm(files.temporary, {recursive: true, force: true});
+	}
+});
+
+test('never replaces the current conversation when Pi cannot resume the session', async () =>
+{
+	const files = await fixture();
+	const store = new MemoryStore();
+	const initialServer = fakePiRpc();
+	let service = serviceFor(files, initialServer, store);
+
+	try
+	{
+		await service.chat({prompt: '第一轮', filePath: files.diagram, context: PAGE_CONTEXT});
+		const sessionId = (await service.getState()).sessionId;
+		service.stop();
+
+		const failingServer = fakePiRpc({onGetState: ({args}) =>
+			({sessionId: argumentValue(args, '--session-id'), messageCount: 0})});
+		service = serviceFor(files, failingServer, store);
+		await assert.rejects(service.chat({prompt: '继续上一轮', filePath: files.diagram,
+			context: PAGE_CONTEXT}),
+			error => error.code === 'WORKSPACE_AGENT_THREAD_RESUME_FAILED' &&
+				/无法继续当前 Agent 对话/.test(error.message));
+		assert.equal(failingServer.requests.filter(request => request.type === 'get_state').length, 1);
+		assert.equal(failingServer.requests.filter(request => request.type === 'prompt').length, 0);
+		assert.equal((await service.getState()).sessionId, sessionId);
 	}
 	finally
 	{
@@ -219,15 +313,16 @@ test('keeps one App Server process and resumes a persistent workspace thread', a
 test('creates a checkpoint and rolls back a valid Agent diagram edit', async () =>
 {
 	const files = await fixture();
-	const server = fakeAppServer({onTurn: async ({send, turnId}) =>
+	const server = fakePiRpc({onPrompt: async ({send}) =>
 	{
 		await writeFile(files.diagram, UPDATED_DIAGRAM, 'utf8');
-		send({method: 'item/started', params: {threadId: 'thread-1', turnId,
-			item: {id: 'file-1', type: 'fileChange', status: 'inProgress'}}});
-		send({method: 'item/completed', params: {threadId: 'thread-1', turnId,
-			item: {id: 'message-1', type: 'agentMessage', phase: 'final_answer', text: '已更新架构图'}}});
-		send({method: 'turn/completed', params: {threadId: 'thread-1',
-			turn: {id: turnId, status: 'completed', items: []}}});
+		send({type: 'tool_execution_start', toolCallId: 'write-1', toolName: 'write',
+			args: {path: files.diagram, content: UPDATED_DIAGRAM}});
+		send({type: 'tool_execution_end', toolCallId: 'write-1', toolName: 'write',
+			result: {}, isError: false});
+		send({type: 'message_end', message: {role: 'assistant',
+			content: [{type: 'text', text: '已更新架构图'}], stopReason: 'stop'}});
+		send({type: 'agent_settled'});
 	}});
 	const service = serviceFor(files, server);
 
@@ -237,6 +332,7 @@ test('creates a checkpoint and rolls back a valid Agent diagram edit', async () 
 			context: {scope: 'selection', pageId: 'page-1', pageName: 'Page-1', cells: [{id: '1'}]}});
 		assert.deepEqual(result.changes, [{path: 'architecture.drawio', kind: 'modified'}]);
 		assert.equal(result.canRollback, true);
+		assert.equal(result.reply, '已更新架构图');
 		assert.equal(await readFile(files.diagram, 'utf8'), UPDATED_DIAGRAM);
 
 		await service.rollback();
@@ -250,21 +346,88 @@ test('creates a checkpoint and rolls back a valid Agent diagram edit', async () 
 	}
 });
 
-test('automatically restores the checkpoint when Codex writes invalid draw.io XML', async () =>
+test('streams assistant text and reasoning without splitting on Unicode line separators', async () =>
 {
 	const files = await fixture();
-	const server = fakeAppServer({onTurn: async ({send, turnId}) =>
+	const expected = `第一行\u2028第二行 ${'x'.repeat(10)}`;
+	const server = fakePiRpc({onPrompt: async ({send}) =>
+	{
+		send({type: 'message_update', assistantMessageEvent: {type: 'thinking_delta', delta: '思考中'}});
+		send({type: 'message_update', assistantMessageEvent: {type: 'text_delta', delta: '第一行\u2028'}});
+		send({type: 'message_update', assistantMessageEvent: {type: 'text_delta', delta: '第二行 '}});
+		send({type: 'message_update', assistantMessageEvent: {type: 'text_delta', delta: 'x'.repeat(10)}});
+		send({type: 'message_end', message: {role: 'assistant',
+			content: [{type: 'text', text: expected}], stopReason: 'stop'}});
+		send({type: 'agent_settled'});
+	}});
+	const service = serviceFor(files, server);
+	const progress = [];
+
+	try
+	{
+		const result = await service.chat({prompt: '写两行', filePath: files.diagram,
+			context: PAGE_CONTEXT}, event => progress.push(event));
+		assert.equal(result.reply, expected);
+		assert.ok(progress.some(event => event.type === 'reasoning' && event.delta === '思考中'));
+		assert.ok(progress.filter(event => event.type === 'message-delta').length === 3);
+	}
+	finally
+	{
+		service.stop();
+		await rm(files.temporary, {recursive: true, force: true});
+	}
+});
+
+test('keeps the tool target in the completion activity when Pi omits tool args', async () =>
+{
+	const files = await fixture();
+	const server = fakePiRpc({onPrompt: ({send}) =>
+	{
+		send({type: 'tool_execution_start', toolCallId: 'read-1', toolName: 'read',
+			args: {path: 'architecture.drawio'}});
+		send({type: 'tool_execution_end', toolCallId: 'read-1', toolName: 'read',
+			result: {}, isError: false});
+		send({type: 'message_end', message: {role: 'assistant',
+			content: [{type: 'text', text: '完成'}], stopReason: 'stop'}});
+		send({type: 'agent_settled'});
+	}});
+	const service = serviceFor(files, server);
+	const progress = [];
+
+	try
+	{
+		await service.chat({prompt: '读取图纸', filePath: files.diagram, context: PAGE_CONTEXT},
+			event => progress.push(event));
+		const activities = progress.filter(event => event.type === 'activity');
+		assert.equal(activities[0].kind, 'read');
+		assert.match(activities[0].label, /architecture\.drawio/);
+		assert.equal(activities[1].status, 'done');
+		assert.match(activities[1].label, /architecture\.drawio/,
+			'the finished label must keep the tool target');
+	}
+	finally
+	{
+		service.stop();
+		await rm(files.temporary, {recursive: true, force: true});
+	}
+});
+
+test('automatically restores the checkpoint when Pi writes invalid draw.io XML', async () =>
+{
+	const files = await fixture();
+	const server = fakePiRpc({onPrompt: async ({send}) =>
 	{
 		await writeFile(files.diagram, '<mxfile><diagram>', 'utf8');
-		send({method: 'turn/completed', params: {threadId: 'thread-1',
-			turn: {id: turnId, status: 'completed', items: []}}});
+		send({type: 'message_end', message: {role: 'assistant',
+			content: [{type: 'text', text: '完成'}], stopReason: 'stop'}});
+		send({type: 'agent_settled'});
 	}});
 	const service = serviceFor(files, server);
 
 	try
 	{
 		await assert.rejects(service.chat({prompt: '破坏图纸', filePath: files.diagram,
-			context: {scope: 'page', pageId: 'page-1', cells: []}}),
+			context: PAGE_CONTEXT}),
 			error => error.code === 'WORKSPACE_AGENT_INVALID_DRAWIO' && /自动撤回/.test(error.message));
 		assert.equal(await readFile(files.diagram, 'utf8'), ORIGINAL_DIAGRAM);
 		await validateDrawioFile(files.diagram);
@@ -276,43 +439,46 @@ test('automatically restores the checkpoint when Codex writes invalid draw.io XM
 	}
 });
 
-test('routes command approval requests through the Agent progress channel', async () =>
+test('routes Pi extension dialogs through the Agent approval channel', async () =>
 {
 	const files = await fixture();
-	let approvalResponse = null;
-	const server = fakeAppServer({
-		onTurn: async ({send, turnId}) =>
+	let uiResponse = null;
+	const server = fakePiRpc({
+		onPrompt: ({send}) =>
 		{
-			send({method: 'item/commandExecution/requestApproval', id: 'server-approval-1', params: {
-				threadId: 'thread-1', turnId, itemId: 'command-1', startedAtMs: Date.now(),
-				command: 'node validate.js', cwd: files.root
-			}});
+			send({type: 'extension_ui_request', id: 'ui-confirm-1', method: 'confirm',
+				title: '允许执行命令？', message: 'node validate.js'});
 		},
-		onClientResponse: ({request, send}) =>
+		onUiResponse: ({request, send}) =>
 		{
-			if (request.id !== 'server-approval-1') return;
-			approvalResponse = request.result;
-			send({method: 'item/completed', params: {threadId: 'thread-1', turnId: 'turn-1',
-				item: {id: 'message-1', type: 'agentMessage', phase: 'final_answer', text: '审批后完成'}}});
-			send({method: 'turn/completed', params: {threadId: 'thread-1',
-				turn: {id: 'turn-1', status: 'completed', items: []}}});
+			uiResponse = request;
+			send({type: 'message_end', message: {role: 'assistant',
+				content: [{type: 'text', text: '审批后完成'}], stopReason: 'stop'}});
+			send({type: 'agent_settled'});
 		}
 	});
 	const service = serviceFor(files, server);
-	let approvalPromise;
+	let approval = null;
+	let approvalPromise = null;
 
 	try
 	{
 		const result = await service.chat({prompt: '验证图纸', filePath: files.diagram,
-			context: {scope: 'page', pageId: 'page-1', cells: []}}, event =>
+			context: PAGE_CONTEXT}, event =>
 		{
 			if (event.type === 'approval')
 			{
-				approvalPromise = service.approve({id: event.approval.id, decision: 'accept'});
+				approval = event.approval;
+				approvalPromise = service.approve({id: approval.id, decision: 'accept'});
 			}
 		});
 		await approvalPromise;
-		assert.deepEqual(approvalResponse, {decision: 'accept'});
+
+		assert.equal(approval.type, 'confirm');
+		assert.match(approval.detail, /允许执行命令/);
+		assert.equal(uiResponse.type, 'extension_ui_response');
+		assert.equal(uiResponse.id, 'ui-confirm-1');
+		assert.equal(uiResponse.confirmed, true);
 		assert.equal(result.reply, '审批后完成');
 	}
 	finally
@@ -322,10 +488,54 @@ test('routes command approval requests through the Agent progress channel', asyn
 	}
 });
 
-test('restores the checkpoint immediately when App Server exits during a turn', async () =>
+test('returns a selected option value to the Pi extension dialog', async () =>
 {
 	const files = await fixture();
-	const server = fakeAppServer({onTurn: async ({child}) =>
+	let uiResponse = null;
+	const server = fakePiRpc({
+		onPrompt: ({send}) =>
+		{
+			send({type: 'extension_ui_request', id: 'ui-select-1', method: 'select',
+				title: '选择布局', options: ['紧凑', '宽松']});
+		},
+		onUiResponse: ({request, send}) =>
+		{
+			uiResponse = request;
+			send({type: 'agent_settled'});
+		}
+	});
+	const service = serviceFor(files, server);
+	let approval = null;
+	let approvalPromise = null;
+
+	try
+	{
+		await service.chat({prompt: '选择布局', filePath: files.diagram, context: PAGE_CONTEXT},
+			event =>
+			{
+				if (event.type === 'approval')
+				{
+					approval = event.approval;
+					approvalPromise = service.approve({id: approval.id, decision: 'accept',
+						value: '紧凑'});
+				}
+			});
+		await approvalPromise;
+
+		assert.deepEqual(approval.options, ['紧凑', '宽松']);
+		assert.equal(uiResponse.value, '紧凑');
+	}
+	finally
+	{
+		service.stop();
+		await rm(files.temporary, {recursive: true, force: true});
+	}
+});
+
+test('restores the checkpoint immediately when Pi exits during a turn', async () =>
+{
+	const files = await fixture();
+	const server = fakePiRpc({onPrompt: async ({child}) =>
 	{
 		await writeFile(files.diagram, UPDATED_DIAGRAM, 'utf8');
 		child.emit('close', 1);
@@ -336,8 +546,8 @@ test('restores the checkpoint immediately when App Server exits during a turn', 
 	{
 		const startedAt = Date.now();
 		await assert.rejects(service.chat({prompt: '更新后异常退出', filePath: files.diagram,
-			context: {scope: 'page', pageId: 'page-1', cells: []}}),
-			error => error.code === 'WORKSPACE_AGENT_CODEX_EXITED');
+			context: PAGE_CONTEXT}),
+			error => error.code === 'WORKSPACE_AGENT_PI_EXITED');
 		assert.ok(Date.now() - startedAt < 2000, 'unexpected exit should not wait for the turn timeout');
 		assert.equal(await readFile(files.diagram, 'utf8'), ORIGINAL_DIAGRAM);
 	}
@@ -354,15 +564,13 @@ test('persists requirements steered into the active workspace turn', async () =>
 	let turnReady;
 	let finishTurn;
 	const ready = new Promise(resolve => { turnReady = resolve; });
-	const server = fakeAppServer({onTurn: ({send, turnId}) => new Promise(resolve =>
+	const server = fakePiRpc({onPrompt: ({send}) => new Promise(resolve =>
 	{
 		finishTurn = () =>
 		{
-			send({method: 'item/completed', params: {threadId: 'thread-1', turnId,
-				item: {id: 'message-steered', type: 'agentMessage', phase: 'final_answer',
-					text: '已按补充要求完成'}}});
-			send({method: 'turn/completed', params: {threadId: 'thread-1',
-				turn: {id: turnId, status: 'completed', items: []}}});
+			send({type: 'message_end', message: {role: 'assistant',
+				content: [{type: 'text', text: '已按补充要求完成'}], stopReason: 'stop'}});
+			send({type: 'agent_settled'});
 			resolve();
 		};
 		setImmediate(turnReady);
@@ -382,6 +590,66 @@ test('persists requirements steered into the active workspace turn', async () =>
 		assert.deepEqual(state.messages.map(message => message.text),
 			['先整理布局', '再把节点名称改短', '已按补充要求完成']);
 		assert.equal(state.messages[1].steered, true);
+		assert.ok(server.requests.some(request => request.type === 'steer' &&
+			request.message === '再把节点名称改短'));
+	}
+	finally
+	{
+		service.stop();
+		await rm(files.temporary, {recursive: true, force: true});
+	}
+});
+
+test('reports an aborted Pi turn as an interrupt and rolls the diagram back', async () =>
+{
+	const files = await fixture();
+	let finishTurn;
+	const server = fakePiRpc({onPrompt: ({send}) => new Promise(resolve =>
+	{
+		finishTurn = () =>
+		{
+			writeFile(files.diagram, UPDATED_DIAGRAM, 'utf8').then(() =>
+			{
+				send({type: 'message_end', message: {role: 'assistant', content: [],
+					stopReason: 'aborted'}});
+				send({type: 'agent_settled'});
+				resolve();
+			});
+		};
+		setImmediate(finishTurn);
+	})});
+	const service = serviceFor(files, server);
+
+	try
+	{
+		await assert.rejects(service.chat({prompt: '停止', filePath: files.diagram,
+			context: PAGE_CONTEXT}),
+			error => error.code === 'WORKSPACE_AGENT_INTERRUPTED');
+		assert.equal(await readFile(files.diagram, 'utf8'), ORIGINAL_DIAGRAM);
+	}
+	finally
+	{
+		service.stop();
+		await rm(files.temporary, {recursive: true, force: true});
+	}
+});
+
+test('reports a clear error when the Pi CLI is not installed', async () =>
+{
+	const files = await fixture();
+	const service = createWorkspaceAgentService({
+		store: new MemoryStore(),
+		getWorkspaceRoot: () => files.root,
+		getPiProfile: () => ({command: 'draw-ai-missing-pi-binary', model: ''}),
+		stateDir: files.stateDir
+	});
+
+	try
+	{
+		await assert.rejects(service.chat({prompt: '检查图纸', filePath: files.diagram,
+			context: PAGE_CONTEXT}),
+			error => error.code === 'WORKSPACE_AGENT_PI_NOT_FOUND');
+		assert.equal(await readFile(files.diagram, 'utf8'), ORIGINAL_DIAGRAM);
 	}
 	finally
 	{
@@ -411,6 +679,8 @@ test('editor Agent panel uses the file-safe direct editing lifecycle', async () 
 	assert.match(pluginSource, /workspaceAgentSetProfile/);
 	assert.match(pluginSource, /agentInput\.disabled = agentLoading/);
 	assert.match(pluginSource, /agentInput\.focus\(\)/);
+	assert.match(pluginSource, /agentState\.sessionId \? '继续当前对话'/);
+	assert.match(pluginSource, /'当前对话 · '/);
 	assert.match(pluginSource, /配置 Agent 模型/);
 	assert.match(pluginSource, /workspaceAgentApprove/);
 	assert.match(pluginSource, /workspaceAgentSteer/);

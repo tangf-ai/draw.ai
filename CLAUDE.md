@@ -8,10 +8,11 @@ draw.ai is an independent Electron desktop application based on the Apache-2.0-l
 - `src/main/workspace-files.js` owns workspace filesystem validation and operations.
 - `src/main/workspace-window.js` owns workspace IPC and its isolated BrowserWindow.
 - `src/workspace/` contains the workspace renderer and preload bridge.
-- `src/main/ai-assistant.js` owns AI configuration, credential storage, requests, and response validation.
-- `drawio/` is the editor submodule. The built-in AI panel is in `drawio/src/main/webapp/plugins/ai-assistant.js`.
+- `src/main/workspace-agent.js` owns the Workspace Agent, which drives the local `pi` CLI in RPC mode; it stores only the Pi command/model profile and conversation metadata, not model credentials.
+- `drawio/` is the editor submodule. The built-in Agent panel is in `drawio/src/main/webapp/plugins/workspace-agent.js`.
+- The former in-app AI assistant (engine configuration, credential storage, request handling, and its `plugins/ai-assistant.js` editor panel) has been removed; do not reintroduce it.
 
-Keep Electron renderer processes isolated. Do not enable Node integration, weaken CSP or sender checks, allow path traversal, follow workspace symlinks, expose AI keys to renderers, or overwrite user files without explicit confirmation.
+Keep Electron renderer processes isolated. Do not enable Node integration, weaken CSP or sender checks, allow path traversal, follow workspace symlinks, or overwrite user files without explicit confirmation.
 
 ## Product identities
 
