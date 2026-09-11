@@ -372,7 +372,10 @@ function parentDirectory(relativePath)
 
 function clearDragFeedback()
 {
-	for (const target of elements.directoryTree.querySelectorAll('.is-drop-target'))
+	for (const target of [
+		...elements.directoryTree.querySelectorAll('.is-drop-target'),
+		...elements.fileList.querySelectorAll('.is-drop-target')
+	])
 	{
 		target.classList.remove('is-drop-target');
 	}
@@ -578,7 +581,7 @@ function createFileRow(node)
 	if (node.type === 'file')
 	{
 		row.draggable = true;
-		row.title = '拖到左侧目录移动图纸';
+		row.title = '拖到目录移动图纸';
 		row.addEventListener('dragstart', (event) =>
 		{
 			draggedRelativePath = node.relativePath;
@@ -590,6 +593,25 @@ function createFileRow(node)
 		{
 			draggedRelativePath = null;
 			clearDragFeedback();
+		});
+	}
+	else if (node.type === 'directory')
+	{
+		row.title = '拖入此目录移动图纸';
+		row.addEventListener('dragover', (event) =>
+		{
+			setDropTarget(event, node.relativePath, row);
+		});
+		row.addEventListener('dragleave', (event) =>
+		{
+			if (event.relatedTarget == null || !row.contains(event.relatedTarget))
+			{
+				row.classList.remove('is-drop-target');
+			}
+		});
+		row.addEventListener('drop', (event) =>
+		{
+			dropFile(event, node.relativePath, row);
 		});
 	}
 

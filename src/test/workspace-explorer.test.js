@@ -55,6 +55,17 @@ describe('editor workspace explorer', () =>
 		assert.match(manager, /api\.moveFile\(relativePath, destinationRelativePath\)/);
 	});
 
+	test('wires manager directory rows to main-list drop targets', async () =>
+	{
+		const manager = await source('src/workspace/workspace.js');
+
+		assert.match(manager,
+			/else if \(node\.type === 'directory'\)[\s\S]*row\.addEventListener\('dragover'/);
+		assert.match(manager,
+			/else if \(node\.type === 'directory'\)[\s\S]*row\.addEventListener\('drop'/);
+		assert.match(manager, /elements\.fileList\.querySelectorAll\('\.is-drop-target'\)/);
+	});
+
 	test('pressing Enter in the name dialog submits the save button', async () =>
 	{
 		const manager = await source('src/workspace/workspace.js');
