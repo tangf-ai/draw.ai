@@ -1,5 +1,5 @@
 /**
- * Built-in Codex workspace agent for draw.ai Desktop.
+ * Built-in Pi workspace agent for draw.ai Desktop.
  */
 Draw.loadPlugin(function installWorkspaceAgent(ui)
 {
@@ -220,6 +220,7 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 		'.geAgentApproval{margin:9px 0 0 20px;padding:8px;border:1px solid light-dark(#f0c36d,#8a6534);border-radius:5px;background:light-dark(#fff8e7,#3b3122)}',
 		'.geAgentApprovalTitle{font-weight:600;font-size:11px}',
 		'.geAgentApprovalDetail{max-height:90px;overflow:auto;margin-top:5px;color:light-dark(#5f6368,#bdc1c6);font:11px/1.4 monospace;white-space:pre-wrap;word-break:break-word}',
+		'.geAgentApprovalInput{box-sizing:border-box;width:100%;margin-top:6px;padding:5px;border:1px solid light-dark(#c8ccd2,#5f6368);border-radius:4px;background:light-dark(#fff,#202124);color:inherit;font:11px/1.4 monospace;resize:vertical}',
 		'.geAgentApprovalActions{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}',
 		'.geAgentApprovalActions button{min-height:26px;padding:3px 8px}',
 		'.geAgentButton{min-height:30px;border:1px solid light-dark(#c8ccd2,#5f6368);border-radius:4px;background:light-dark(#fff,#303134);color:inherit;padding:5px 12px;cursor:pointer;font-size:12px}',
@@ -282,7 +283,7 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 	agentPageScopeSelect.appendChild(agentPageScopeCurrentOption);
 	agentPageScopeSelect.appendChild(agentPageScopeAllOption);
 	agentPageScopeSelect.appendChild(agentPageScopeCustomOption);
-	var agentNewThreadButton = createButton('geAgentIconBtn', '+', '新建 Agent 对话');
+	var agentNewThreadButton = createButton('geAgentIconBtn', '+', '新建独立对话（清空当前上下文）');
 	var agentProfileButton = createButton('geAgentIconBtn', '⚙', '配置 Agent 模型');
 	var agentRollbackButton = createButton('geAgentIconBtn', '↶', '撤回上一轮 Agent 文件修改');
 	var agentStopButton = createButton('geAgentIconBtn', '■', '停止 Agent');
@@ -774,9 +775,9 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 	{
 		if (agentLoading) return '正在读取 Agent 状态…';
 		if (agentState == null || agentState.configured !== true) return '请先设置图纸工作区';
-		if (agentBusy) return 'Codex 正在执行 · 可继续补充要求';
-		var runtime = agentState.model || agentState.command || 'codex';
-		return 'Codex · ' + runtime;
+		if (agentBusy) return 'Pi 正在执行 · 可继续补充要求';
+		var runtime = agentState.model || agentState.command || 'pi';
+		return (agentState.sessionId ? '当前对话 · ' : '新对话 · ') + runtime;
 	}
 
 	function updateAgentControls()
@@ -788,7 +789,8 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 			(agentState != null && agentState.configured === false);
 		agentSendButton.textContent = agentBusy ? '↗' : '↑';
 		agentSendButton.title = agentBusy ? '补充要求' : '发送';
-		agentInput.setAttribute('placeholder', agentBusy ? '补充当前任务的要求' : '向 Agent 提交修改要求');
+		agentInput.setAttribute('placeholder', agentBusy ? '补充当前任务的要求' :
+			(agentState != null && agentState.sessionId ? '继续当前对话' : '向 Agent 提交修改要求'));
 		agentNewThreadButton.disabled = agentBusy || agentLoading;
 		agentProfileButton.disabled = agentBusy || agentLoading;
 		agentRollbackButton.disabled = agentBusy || agentLoading ||
@@ -803,16 +805,16 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 		var dialog = createElement('div', 'geAgentProfileDialog');
 		var title = createElement('div', 'geAgentProfileTitle', 'Agent 模型配置');
 		var hint = createElement('div', 'geAgentProfileHint',
-			'配置 Codex 命令和模型名称。模型留空时使用 Codex 默认模型，保存后对下一轮任务生效。');
+			'配置 Pi 命令和模型名称。模型留空时使用 Pi 的默认模型，保存后对下一轮任务生效。');
 		var commandField = createElement('div', 'geAgentProfileField');
-		var commandLabel = createElement('label', null, 'Codex 命令');
+		var commandLabel = createElement('label', null, 'Pi 命令');
 		var commandInput = createElement('input', 'geAgentProfileInput');
 		commandInput.type = 'text';
 		commandInput.autocomplete = 'off';
 		commandInput.spellcheck = false;
-		commandInput.value = agentState != null && agentState.command ? agentState.command : 'codex';
-		commandLabel.htmlFor = 'geAgentCodexCommand';
-		commandInput.id = 'geAgentCodexCommand';
+		commandInput.value = agentState != null && agentState.command ? agentState.command : 'pi';
+		commandLabel.htmlFor = 'geAgentPiCommand';
+		commandInput.id = 'geAgentPiCommand';
 		commandField.appendChild(commandLabel);
 		commandField.appendChild(commandInput);
 		var modelField = createElement('div', 'geAgentProfileField');
@@ -821,10 +823,10 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 		modelInput.type = 'text';
 		modelInput.autocomplete = 'off';
 		modelInput.spellcheck = false;
-		modelInput.placeholder = '例如 gpt-5.6-sol';
+		modelInput.placeholder = '例如 provider/模型，如 m4/gpt-5.6-sol';
 		modelInput.value = agentState != null && agentState.model ? agentState.model : '';
-		modelLabel.htmlFor = 'geAgentCodexModel';
-		modelInput.id = 'geAgentCodexModel';
+		modelLabel.htmlFor = 'geAgentPiModel';
+		modelInput.id = 'geAgentPiModel';
 		modelField.appendChild(modelLabel);
 		modelField.appendChild(modelInput);
 		var error = createElement('div', 'geAgentProfileError');
@@ -864,7 +866,7 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 		request('workspaceAgentGetProfile').then(function(profile)
 		{
 			agentState = Object.assign({}, agentState || {}, profile);
-			commandInput.value = profile.command || 'codex';
+			commandInput.value = profile.command || 'pi';
 			modelInput.value = profile.model || '';
 		}).catch(function() {});
 		window.setTimeout(function() { commandInput.focus(); commandInput.select(); }, 0);
@@ -1011,7 +1013,7 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 
 	function ensureAgentRun()
 	{
-		return agentRun || beginAgentRun('Codex 正在处理图纸');
+		return agentRun || beginAgentRun('Pi 正在处理图纸');
 	}
 
 	function setAgentActivity(event)
@@ -1033,14 +1035,14 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 		run.activities.classList.remove('geAgentHidden');
 	}
 
-	function resolveAgentApproval(id, decision, approvalNode)
+	function resolveAgentApproval(id, decision, approvalNode, value)
 	{
-		var buttons = approvalNode.querySelectorAll('button');
-		for (var i = 0; i < buttons.length; i++) buttons[i].disabled = true;
+		var controls = approvalNode.querySelectorAll('button, input, textarea');
+		for (var i = 0; i < controls.length; i++) controls[i].disabled = true;
 
-		request('workspaceAgentApprove', {input: {id: id, decision: decision}}).catch(function(error)
+		request('workspaceAgentApprove', {input: {id: id, decision: decision, value: value}}).catch(function(error)
 		{
-			for (var i = 0; i < buttons.length; i++) buttons[i].disabled = false;
+			for (var i = 0; i < controls.length; i++) controls[i].disabled = false;
 			var detail = approvalNode.querySelector('.geAgentApprovalDetail');
 			if (detail != null) detail.textContent = error.message;
 		});
@@ -1051,33 +1053,66 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 		if (approval == null || approval.id == null || agentApprovals[approval.id] != null) return;
 		var run = ensureAgentRun();
 		var node = createElement('div', 'geAgentApproval');
-		var typeName = {command: '命令审批', file: '文件审批', permissions: '权限审批'}[approval.type] || '操作审批';
+		var typeName = {confirm: '确认请求', select: '选择请求', input: '输入请求',
+			editor: '编辑请求'}[approval.type] || 'Pi 请求';
 		node.appendChild(createElement('div', 'geAgentApprovalTitle', typeName));
-		node.appendChild(createElement('div', 'geAgentApprovalDetail', approval.detail || 'Codex 请求继续执行'));
-		var actions = createElement('div', 'geAgentApprovalActions');
-		var decline = createButton('geAgentButton', '拒绝');
-		var accept = createButton('geAgentButton geAgentButtonPrimary', '允许');
-		decline.addEventListener('click', function()
-		{
-			resolveAgentApproval(approval.id, 'decline', node);
-		});
-		accept.addEventListener('click', function()
-		{
-			resolveAgentApproval(approval.id, 'accept', node);
-		});
-		actions.appendChild(decline);
+		node.appendChild(createElement('div', 'geAgentApprovalDetail',
+			approval.detail || 'Pi 请求继续执行'));
+		var control = null;
 
-		if (approval.allowSession === true)
+		if (approval.type === 'input' || approval.type === 'editor')
 		{
-			var acceptSession = createButton('geAgentButton', '本轮会话允许');
-			acceptSession.addEventListener('click', function()
-			{
-				resolveAgentApproval(approval.id, 'acceptForSession', node);
-			});
-			actions.appendChild(acceptSession);
+			control = createElement('textarea', 'geAgentApprovalInput');
+			control.rows = approval.type === 'editor' ? 4 : 2;
+			control.spellcheck = false;
+			control.value = approval.prefill || '';
+			node.appendChild(control);
 		}
 
-		actions.appendChild(accept);
+		var actions = createElement('div', 'geAgentApprovalActions');
+
+		if (Array.isArray(approval.options) && approval.options.length > 0)
+		{
+			approval.options.forEach(function(option)
+			{
+				var optionButton = createButton('geAgentButton', option);
+				optionButton.title = option;
+				optionButton.addEventListener('click', function()
+				{
+					resolveAgentApproval(approval.id, 'accept', node, option);
+				});
+				actions.appendChild(optionButton);
+			});
+		}
+		else
+		{
+			var decline = createButton('geAgentButton', '拒绝');
+			decline.addEventListener('click', function()
+			{
+				resolveAgentApproval(approval.id, 'decline', node);
+			});
+			var accept = createButton('geAgentButton geAgentButtonPrimary', '允许');
+			accept.addEventListener('click', function()
+			{
+				if (control != null && control.value === '')
+				{
+					control.focus();
+					return;
+				}
+				resolveAgentApproval(approval.id, 'accept', node,
+					control != null ? control.value : undefined);
+			});
+			actions.appendChild(decline);
+			actions.appendChild(accept);
+		}
+
+		var cancel = createButton('geAgentButton', '取消');
+		cancel.addEventListener('click', function()
+		{
+			resolveAgentApproval(approval.id, 'cancel', node);
+		});
+		actions.appendChild(cancel);
+
 		node.appendChild(actions);
 		run.approvals.appendChild(node);
 		agentApprovals[approval.id] = node;
@@ -1091,7 +1126,7 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 
 		if (event.type === 'status')
 		{
-			run.status.textContent = event.label || 'Codex 正在执行';
+			run.status.textContent = event.label || 'Pi 正在执行';
 		}
 		else if (event.type === 'message-delta')
 		{
@@ -1214,7 +1249,7 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 
 			if (next.busy === true && agentRun == null)
 			{
-				beginAgentRun('Codex 正在其他窗口执行');
+				beginAgentRun('Pi 正在其他窗口执行');
 			}
 
 			return next;
@@ -1381,7 +1416,7 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 	{
 		if (!agentBusy) return;
 		agentStopButton.disabled = true;
-		ensureAgentRun().status.textContent = '正在停止 Codex';
+		ensureAgentRun().status.textContent = '正在停止 Pi';
 		request('workspaceAgentInterrupt').catch(function(error)
 		{
 			addAgentMessage({role: 'assistant', text: error.message}, true);
