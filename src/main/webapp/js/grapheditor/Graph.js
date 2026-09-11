@@ -6084,14 +6084,14 @@ Graph.prototype.linkRelation = 'nofollow noopener noreferrer';
 Graph.prototype.defaultScrollbars = true;
 
 /**
- * Specifies if the page should be visible for new files. Default is true.
+ * Specifies if the page should be visible for new files. Default is false.
  */
-Graph.prototype.defaultPageVisible = true;
+Graph.prototype.defaultPageVisible = false;
 
 /**
- * Specifies if the page should be visible for new files. Default is true.
+ * Specifies if the grid should be enabled for new files. Default is false.
  */
-Graph.prototype.defaultGridEnabled = urlParams['grid'] != '0';
+Graph.prototype.defaultGridEnabled = urlParams['grid'] != null ? urlParams['grid'] != '0' : false;
 
 /**
  * Specifies the default value for connection arrows on hover. Default is true.

@@ -776,6 +776,7 @@ EditorUi.prototype.restoreViewState = function(page, viewState, selection)
  */
 Graph.prototype.createViewState = function(node)
 {
+	var grid = node.getAttribute('grid');
 	var pv = node.getAttribute('page');
 	var ps = parseFloat(node.getAttribute('pageScale'));
 	var pw = parseFloat(node.getAttribute('pageWidth'));
@@ -801,7 +802,7 @@ Graph.prototype.createViewState = function(node)
 	}
 
 	return {
-		gridEnabled: node.getAttribute('grid') != '0',
+		gridEnabled: (grid != null) ? grid != '0' : this.defaultGridEnabled,
 		//gridColor: node.getAttribute('gridColor') || mxSettings.getGridColor(Editor.isDarkMode()),
 		gridSize: parseFloat(node.getAttribute('gridSize')) || mxGraph.prototype.gridSize,
 		guidesEnabled: node.getAttribute('guides') != '0',

@@ -8649,9 +8649,9 @@
 	Graph.prototype.defaultScrollbars = urlParams['sb'] != '0';
 
 	/**
-	 * Specifies if the page should be visible for new files. Default is true.
+	 * Specifies if the page should be visible for new files. Default is false.
 	 */
-	Graph.prototype.defaultPageVisible = urlParams['pv'] != '0';
+	Graph.prototype.defaultPageVisible = urlParams['pv'] != null ? urlParams['pv'] != '0' : false;
 
 	/**
 	 * Copy on connect is enabled by default in the sketch theme. Use the
