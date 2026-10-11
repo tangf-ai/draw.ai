@@ -231,6 +231,7 @@ mxStencilRegistry.allowEval = false;
 	// loading. Register the built-in Agent immediately so it also works in
 	// fast-starting themes such as Minimal.
 	loadBuiltInPlugin(workspaceExplorerPluginUrl);
+	loadBuiltInPlugin('./plugins/common-shapes.js');
 	loadWorkspaceAgent();
 
 	var origAppMain = App.main;
