@@ -100,7 +100,7 @@ test('Workspace Agent persists validated Pi model configuration for the next tur
 });
 
 // Minimal Pi RPC server: JSONL commands on stdin, responses and events on stdout.
-function fakePiRpc({onPrompt, onUiResponse, onGetState} = {})
+function fakePiRpc({onPrompt, onUiResponse, onGetState, onGetModels} = {})
 {
 	const requests = [];
 	const spawns = [];
@@ -138,6 +138,11 @@ function fakePiRpc({onPrompt, onUiResponse, onGetState} = {})
 					const state = onGetState ? onGetState({request, args, spawnCount}) :
 						{sessionId: argumentValue(args, '--session-id'), messageCount: 1};
 					succeed(request, state);
+				}
+				else if (request.type === 'get_available_models')
+				{
+					if (onGetModels) onGetModels({request, send, child, succeed});
+					else succeed(request, {models: []});
 				}
 				else if (request.type === 'prompt')
 				{
@@ -194,6 +199,76 @@ function serviceFor(files, server, store = new MemoryStore())
 }
 
 const PAGE_CONTEXT = {scope: 'page', pageId: 'page-1', pageName: 'Page-1', cells: []};
+
+test('lists Pi models with an ephemeral process without changing profile or conversation', async () =>
+{
+	const files = await fixture();
+	const store = new MemoryStore();
+	let child;
+	const server = fakePiRpc({onGetModels: ({child: process, request, succeed}) =>
+	{
+		child = process;
+		succeed(request, {models: [
+			{provider: 'z-provider', id: 'second', name: 'Second', apiKey: 'not-for-renderer'},
+			{provider: 'a-provider', id: 'first', name: 'First'},
+			{provider: 'a-provider', id: 'first', name: 'First'},
+			{provider: 'invalid', id: 'line\nbreak'},
+			{id: 'missing-provider'}
+		]});
+	}});
+	const service = serviceFor(files, server, store);
+
+	try
+	{
+		const stateBefore = await service.getState();
+		assert.deepEqual(await service.listModels({command: '/custom/pi'}), {models: [
+			{provider: 'a-provider', id: 'first', name: 'First'},
+			{provider: 'z-provider', id: 'second', name: 'Second'}
+		]});
+		assert.equal(server.spawns[0].command, '/custom/pi');
+		assert.deepEqual(server.spawns[0].args, ['--mode', 'rpc', '--no-session']);
+		assert.equal(child.stdin.writableEnded, true, 'discovery process is stopped');
+		assert.deepEqual(await service.getState(), stateBefore);
+		assert.deepEqual(service.getProfile(), {command: '/opt/pi', model: 'test-model'});
+		assert.equal(store.get('workspaceAgent.piProfile'), undefined);
+		assert.deepEqual(server.requests.map(request => request.type), ['get_available_models']);
+	}
+	finally
+	{
+		service.stop();
+		await rm(files.temporary, {recursive: true, force: true});
+	}
+});
+
+test('model discovery works before workspace setup and stops Pi after RPC failure', async () =>
+{
+	const files = await fixture();
+	let child;
+	let fail = true;
+	const server = fakePiRpc({onGetModels: ({child: process, request, send, succeed}) =>
+	{
+		child = process;
+		if (fail) send({type: 'response', id: request.id, success: false, error: 'models unavailable'});
+		else succeed(request, {models: []});
+	}});
+	const service = createWorkspaceAgentService({stateDir: files.stateDir,
+		getWorkspaceRoot: () => null, spawnImpl: server.spawnImpl});
+	try
+	{
+		await assert.rejects(service.listModels(), /models unavailable/);
+		assert.equal(child.stdin.writableEnded, true);
+		fail = false;
+		assert.deepEqual(await service.listModels(), {models: []});
+		assert.equal(server.spawns[1].command, 'pi');
+		await assert.rejects(service.listModels({command: 'pi\n--invalid'}),
+			error => error.code === 'WORKSPACE_AGENT_INVALID_INPUT');
+	}
+	finally
+	{
+		service.stop();
+		await rm(files.temporary, {recursive: true, force: true});
+	}
+});
 
 test('keeps one Pi process and resumes a persistent workspace session', async () =>
 {
@@ -668,8 +743,9 @@ test('editor Agent panel uses the file-safe direct editing lifecycle', async () 
 	const reloadStart = electronSource.indexOf('EditorUi.prototype.reloadExternalFile = function');
 	const reloadEnd = electronSource.indexOf('\n\t// Watches the path for changes', reloadStart);
 	const reloadSource = electronSource.slice(reloadStart, reloadEnd);
-	assert.match(pluginSource, /createButton\('geAgentModeTab geAgentActive', '格式'\)/);
-	assert.match(pluginSource, /createButton\('geAgentModeTab', 'Agent'\)/);
+	assert.match(pluginSource, /createButton\('geAgentLauncher', '✦ AI 助手'/);
+	assert.doesNotMatch(pluginSource, /ui\.formatWidth\s*=/,
+		'floating assistant must not resize the diagram inspector');
 	assert.doesNotMatch(pluginSource, /快速编辑/);
 	assert.doesNotMatch(electronSource, /var aiAssistantPluginUrl/);
 	assert.match(electronSource, /var workspaceAgentPluginUrl = '\.\/plugins\/workspace-agent\.js'/);

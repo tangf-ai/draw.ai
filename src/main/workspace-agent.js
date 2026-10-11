@@ -563,7 +563,7 @@ const PI_DIALOG_METHODS = new Set(['confirm', 'select', 'input', 'editor']);
 
 class PiRpcClient
 {
-	constructor({command, cwd, sessionDirectory, sessionId, model, spawnImpl,
+	constructor({command, cwd, sessionDirectory, sessionId, model, spawnImpl, ephemeral = false,
 		onEvent, onUiRequest, onExit})
 	{
 		this.command = command;
@@ -572,6 +572,7 @@ class PiRpcClient
 		this.sessionId = sessionId;
 		this.model = model;
 		this.spawnImpl = spawnImpl;
+		this.ephemeral = ephemeral;
 		this.onEvent = onEvent;
 		this.onUiRequest = onUiRequest;
 		this.onExit = onExit;
@@ -587,6 +588,8 @@ class PiRpcClient
 
 	buildArgs()
 	{
+		if (this.ephemeral) return ['--mode', 'rpc', '--no-session'];
+
 		const args = ['--mode', 'rpc', '--session-dir', this.sessionDirectory,
 			'--session-id', this.sessionId, '--append-system-prompt', workspaceDeveloperInstructions()];
 
@@ -889,6 +892,7 @@ export function createWorkspaceAgentService({
 	let active = null;
 	let approvalCounter = 0;
 	const pendingApprovals = new Map();
+	const modelClients = new Set();
 
 	function progress(type, data = {})
 	{
@@ -1101,6 +1105,49 @@ export function createWorkspaceAgentService({
 		{
 			const profile = typeof getPiProfile === 'function' ? getPiProfile() : {};
 			return {command: profile.command || DEFAULT_PI_COMMAND, model: profile.model || ''};
+		},
+
+		async listModels(input = {})
+		{
+			const current = typeof getPiProfile === 'function' ? getPiProfile() : {};
+			const {command} = normalizeWorkspaceAgentPiProfile({
+				command: input.command == null ? current.command || DEFAULT_PI_COMMAND : input.command,
+				model: ''
+			});
+			const configuredRoot = typeof getWorkspaceRoot === 'function' ? getWorkspaceRoot() : null;
+			await fs.mkdir(stateDir, {recursive: true});
+			const cwd = configuredRoot ? await resolveWorkspaceRoot(getWorkspaceRoot) : stateDir;
+			const discovery = new PiRpcClient({command, cwd, spawnImpl, ephemeral: true,
+				onUiRequest: request => discovery.respond({id: request.id, cancelled: true})});
+			modelClients.add(discovery);
+
+			try
+			{
+				const result = await discovery.request('get_available_models');
+				if (!Array.isArray(result?.models))
+				{
+					throw agentError('Pi 未返回有效的模型列表', 'WORKSPACE_AGENT_RPC_FAILED');
+				}
+				const unique = new Map();
+
+				for (const model of result.models)
+				{
+					if (typeof model?.provider !== 'string' || typeof model?.id !== 'string' ||
+						!model.provider || !model.id) continue;
+					const value = `${model.provider}/${model.id}`;
+					if (value.length > 200 || /[\0\r\n]/.test(value)) continue;
+					unique.set(value, {provider: model.provider, id: model.id,
+						name: typeof model.name === 'string' ? model.name : model.id});
+				}
+
+				return {models: Array.from(unique.values()).sort((a, b) =>
+					`${a.provider}/${a.id}`.localeCompare(`${b.provider}/${b.id}`))};
+			}
+			finally
+			{
+				discovery.stop();
+				modelClients.delete(discovery);
+			}
 		},
 
 		setProfile(input)
@@ -1372,6 +1419,8 @@ export function createWorkspaceAgentService({
 
 		stop()
 		{
+			for (const discovery of modelClients) discovery.stop();
+			modelClients.clear();
 			client?.stop();
 			client = null;
 			clientKey = null;

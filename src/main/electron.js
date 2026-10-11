@@ -3984,6 +3984,9 @@ ipcMain.on("rendererReq", async (event, args) =>
 		case 'workspaceAgentSetProfile':
 			ret = workspaceAgentService.setProfile(args.profile);
 			break;
+		case 'workspaceAgentListModels':
+			ret = await workspaceAgentService.listModels({command: args.command});
+			break;
 		case 'workspaceAgentChat':
 			ret = await workspaceAgentService.chat(args.input, progress =>
 			{
