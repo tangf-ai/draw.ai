@@ -16,6 +16,9 @@ Draw.loadPlugin(function(ui)
 	var draggedRelativePath = null;
 	var graphModelListener = null;
 	var removeWorkspaceChangedListener = null;
+	var operationInProgress = false;
+	var fileMenu = null;
+	var fileMenuTrigger = null;
 
 	function element(tag, className, text)
 	{
@@ -77,6 +80,15 @@ Draw.loadPlugin(function(ui)
 		'.geWorkspaceRow.geWorkspaceSelected{background:light-dark(#fef3e2,#413323)}',
 		'.geWorkspaceRow .geWorkspaceFolder{color:light-dark(#c77c18,#f0b45b)}',
 		'.geWorkspaceRowLabel{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+		'.geWorkspaceEntry{position:relative;display:flex;align-items:center}',
+		'.geWorkspaceEntry .geWorkspaceRow{padding-right:32px}',
+		'.geWorkspaceMore{position:absolute;right:2px;top:1px;opacity:0;font-size:21px}',
+		'.geWorkspaceEntry:hover .geWorkspaceMore,.geWorkspaceEntry:focus-within .geWorkspaceMore{opacity:1}',
+		'.geWorkspaceBusy{pointer-events:none;opacity:.65}',
+		'.geWorkspaceFileMenu{position:fixed;z-index:10005;min-width:160px;padding:4px;border:1px solid light-dark(#d6d9de,#454950);border-radius:6px;background:light-dark(#fff,#292b30);box-shadow:0 4px 16px #0003;color:light-dark(#202124,#e8eaed);font:12px Arial,sans-serif}',
+		'.geWorkspaceFileMenu button{display:block;width:100%;padding:8px 12px;border:0;border-radius:3px;text-align:left;background:transparent;color:inherit;font:inherit;cursor:pointer}',
+		'.geWorkspaceFileMenu button:hover,.geWorkspaceFileMenu button:focus{background:light-dark(#e8f0fe,#26354d);outline:none}',
+		'.geWorkspaceFileMenu button:last-child{color:light-dark(#c5221f,#f28b82)}',
 		'.geWorkspaceChevron{transition:transform .14s ease}',
 		'.geWorkspaceChevron.geWorkspaceExpanded{transform:rotate(90deg)}',
 		'.geWorkspaceFooter{display:flex;align-items:center;gap:5px;padding:7px 9px;border-top:1px solid light-dark(#e5e8ec,#383b40)}',
@@ -89,7 +101,9 @@ Draw.loadPlugin(function(ui)
 		'.geWorkspacePrimary{border-color:#1a73e8!important;background:#1a73e8!important;color:#fff!important}',
 		'.geWorkspaceDialog{padding:16px;font:13px Arial,sans-serif;color:light-dark(#202124,#e8eaed)}',
 		'.geWorkspaceDialogTitle{margin:0 0 14px;font-weight:600;font-size:15px;letter-spacing:0}',
-		'.geWorkspaceDialog input{width:100%;height:34px;padding:0 9px;border:1px solid light-dark(#c8ccd2,#5f6368);border-radius:4px;background:light-dark(#fff,#292a2e);color:inherit;font:13px Arial,sans-serif;box-sizing:border-box;outline:none;letter-spacing:0}',
+		'.geWorkspaceDialog input,.geWorkspaceDialog select{width:100%;height:34px;padding:0 9px;border:1px solid light-dark(#c8ccd2,#5f6368);border-radius:4px;background:light-dark(#fff,#292a2e);color:inherit;font:13px Arial,sans-serif;box-sizing:border-box;outline:none;letter-spacing:0}',
+		'.geWorkspaceDialogError{min-height:16px;margin-top:8px;color:light-dark(#c5221f,#f28b82);font-size:12px;overflow-wrap:anywhere}',
+		'.geWorkspaceDialog p{line-height:1.5;overflow-wrap:anywhere}',
 		'.geWorkspaceDialog input:focus{border-color:#1a73e8;box-shadow:0 0 0 1px #1a73e8}',
 		'.geWorkspaceDialogActions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}'
 	].join('');
@@ -244,29 +258,248 @@ Draw.loadPlugin(function(ui)
 
 	function moveDiagram(relativePath, destinationRelativePath)
 	{
-		var movingCurrentFile = state != null && normalizedPath(state.root + '/' + relativePath) ===
-			normalizedPath(currentFilePath());
-		var ready = movingCurrentFile ? saveCurrentFile() : Promise.resolve();
-
-		return ready.then(function()
+		return runFileOperation({relativePath: relativePath}, 'move', function(root)
 		{
-			return api.moveFile(relativePath, destinationRelativePath);
-		}).then(function(result)
+			return api.moveFile(relativePath, destinationRelativePath, root);
+		}).then(function()
 		{
-			state = result.state;
 			currentDirectory = destinationRelativePath;
 			if (destinationRelativePath) expanded[destinationRelativePath] = true;
 			render();
-
-			if (movingCurrentFile)
-			{
-				return api.resolveItem(result.movedRelativePath).then(function(resolved)
-				{
-					ui.loadArgs({args: [resolved.absolutePath]});
-				});
-			}
 		}).catch(showError);
 	}
+
+	function runFileOperation(item, kind, action)
+	{
+		if (operationInProgress) return Promise.reject(new Error('文件操作进行中，请稍候'));
+		var file = ui.getCurrentFile();
+		var current = isCurrentFile(item);
+		var root = state?.root;
+		var originalPath = currentFilePath();
+		var graph = ui.editor.graph;
+		var enabled = graph.isEnabled();
+		operationInProgress = true;
+		workspaceView.classList.add('geWorkspaceBusy');
+
+		return Promise.resolve().then(function()
+		{
+			if (current)
+			{
+				if (file.savingFile) throw new Error('当前图纸正在保存，请稍后重试');
+				graph.stopEditing(false);
+				graph.setEnabled(false);
+				file.clearAutosave?.();
+				return saveCurrentFile();
+			}
+		}).then(function()
+		{
+			if (state?.root !== root || (current && (ui.getCurrentFile() !== file ||
+				currentFilePath() !== originalPath))) throw new Error('当前图纸或工作区已切换，请重试');
+
+			if (current && kind !== 'copy' && typeof ui.unwatchPath === 'function')
+			{
+				return ui.unwatchPath(originalPath);
+			}
+		}).then(function() { return action(root); }).then(function(result)
+		{
+			if (current && (kind === 'rename' || kind === 'move'))
+			{
+				// Rebind the existing document, preserving its graph, view and undo history.
+				file.fileObject.path = result.absolutePath;
+				file.fileObject.name = result.absolutePath.split(/[\\/]/).pop();
+				file.title = file.fileObject.name;
+				file.addToRecent?.();
+				file.descriptorChanged();
+			}
+			else if (current && kind === 'trash' && ui.getCurrentFile() === file)
+			{
+				// Leave no document bound to the removed path, so Save cannot recreate it.
+				ui.fileLoaded(new LocalFile(ui, ui.emptyDiagramXml, '未命名图纸.drawio'));
+			}
+
+			state = result.state;
+			return result;
+		}).finally(function()
+		{
+			operationInProgress = false;
+			workspaceView.classList.remove('geWorkspaceBusy');
+			if (current && ui.getCurrentFile() === file)
+			{
+				graph.setEnabled(enabled);
+				ui.watchFile?.(file);
+			}
+			render();
+		});
+	}
+
+	function closeFileMenu(restoreFocus)
+	{
+		if (fileMenu?.parentNode) fileMenu.parentNode.removeChild(fileMenu);
+		fileMenu = null;
+		if (restoreFocus && fileMenuTrigger?.isConnected) fileMenuTrigger.focus();
+		fileMenuTrigger = null;
+	}
+
+	function showActionDialog(title, content, label, action)
+	{
+		var dialog = element('form', 'geWorkspaceDialog');
+		dialog.appendChild(element('div', 'geWorkspaceDialogTitle', title));
+		dialog.appendChild(content);
+		var errorLabel = element('div', 'geWorkspaceDialogError');
+		errorLabel.setAttribute('role', 'alert');
+		dialog.appendChild(errorLabel);
+		var actions = element('div', 'geWorkspaceDialogActions');
+		var cancel = element('button', 'geWorkspaceFooterButton', '取消');
+		var submit = element('button', 'geWorkspaceFooterButton geWorkspacePrimary', label);
+		cancel.type = 'button';
+		submit.type = 'submit';
+		cancel.addEventListener('click', function() { ui.hideDialog(); });
+		dialog.addEventListener('submit', function(event)
+		{
+			event.preventDefault();
+			if (submit.disabled) return;
+			submit.disabled = cancel.disabled = true;
+			errorLabel.textContent = '';
+			Promise.resolve().then(action).then(function() { ui.hideDialog(); }).catch(function(error)
+			{
+				errorLabel.textContent = error?.message || '操作失败';
+			}).finally(function() { submit.disabled = cancel.disabled = false; });
+		});
+		dialog.addEventListener('keydown', function(event)
+		{
+			// Do not let graph shortcuts consume Enter while editing a file name.
+			event.stopPropagation();
+			if (event.key === 'Enter' && event.isComposing) event.preventDefault();
+			else if (event.key === 'Enter' && event.target.tagName === 'INPUT')
+			{
+				event.preventDefault();
+				dialog.requestSubmit(submit);
+			}
+			if (event.key === 'Escape' && !submit.disabled) { event.preventDefault(); ui.hideDialog(); }
+		});
+		actions.appendChild(cancel);
+		actions.appendChild(submit);
+		dialog.appendChild(actions);
+		ui.showDialog(dialog, 340, 210, true, true);
+		window.setTimeout(function() { (content.querySelector('input,select') || cancel).focus(); }, 0);
+	}
+
+	function renameDiagram(item)
+	{
+		var content = element('div');
+		var input = element('input');
+		input.value = item.name;
+		input.setAttribute('aria-label', '文件名称');
+		content.appendChild(input);
+		showActionDialog('重命名图文件', content, '保存', function()
+		{
+			if (!input.value.trim()) throw new Error('请输入文件名称');
+			return runFileOperation(item, 'rename', function(root)
+			{
+				return api.renameFile(item.relativePath, input.value.trim(), root);
+			});
+		});
+		input.setSelectionRange(0, Math.max(0, item.name.lastIndexOf('.')) || item.name.length);
+	}
+
+	function moveDiagramDialog(item)
+	{
+		var content = element('div');
+		content.appendChild(element('p', '', item.name));
+		var select = element('select');
+		select.setAttribute('aria-label', '目标目录');
+		function addDirectory(relativePath, name, children)
+		{
+			var option = element('option', '', name);
+			option.value = relativePath;
+			option.disabled = relativePath === parentPath(item.relativePath);
+			select.appendChild(option);
+			(children || []).forEach(function(child)
+			{
+				if (child.type === 'directory') addDirectory(child.relativePath, child.relativePath, child.children);
+			});
+		}
+		addDirectory('', '工作区根目录', state?.tree);
+		var available = Array.from(select.options).find(function(option) { return !option.disabled; });
+		if (!available) return showError(new Error('请先创建其他目录，或直接拖拽到目标目录'));
+		select.value = available.value;
+		content.appendChild(select);
+		showActionDialog('移动图文件', content, '移动', function()
+		{
+			return runFileOperation(item, 'move', function(root)
+			{
+				return api.moveFile(item.relativePath, select.value, root);
+			}).then(function()
+			{
+				currentDirectory = select.value;
+				expanded[currentDirectory] = true;
+				render();
+			});
+		});
+	}
+
+	function trashDiagram(item)
+	{
+		var content = element('div');
+		content.appendChild(element('p', '', '“' + item.name + '”将移到系统废纸篓，可从废纸篓恢复。'));
+		if (isCurrentFile(item)) content.appendChild(element('p', '', '当前图纸的未保存修改会先保存。'));
+		showActionDialog('删除图文件', content, '移到废纸篓', function()
+		{
+			return runFileOperation(item, 'trash', function(root) { return api.trashFile(item.relativePath, root); });
+		});
+	}
+
+	function showFileMenu(item, trigger, x, y)
+	{
+		if (operationInProgress) return;
+		closeFileMenu();
+		fileMenuTrigger = trigger;
+		fileMenu = element('div', 'geWorkspaceFileMenu');
+		fileMenu.setAttribute('role', 'menu');
+		fileMenu.setAttribute('aria-label', item.name + ' 文件操作');
+		[
+			['重命名', function() { renameDiagram(item); }],
+			['复制', function()
+			{
+				return runFileOperation(item, 'copy', function(root)
+				{
+					return api.copyFile(item.relativePath, parentPath(item.relativePath), root);
+				}).catch(showError);
+			}],
+			['移动到…', function() { moveDiagramDialog(item); }],
+			['删除', function() { trashDiagram(item); }]
+		].forEach(function(entry)
+		{
+			var button = element('button', '', entry[0]);
+			button.type = 'button';
+			button.setAttribute('role', 'menuitem');
+			button.addEventListener('click', function() { closeFileMenu(); entry[1](); });
+			fileMenu.appendChild(button);
+		});
+		fileMenu.addEventListener('keydown', function(event)
+		{
+			event.stopPropagation();
+			if (event.key === 'Escape') { event.preventDefault(); closeFileMenu(true); }
+			else if (event.key === 'Tab') closeFileMenu();
+			else if (event.key === 'ArrowDown' || event.key === 'ArrowUp')
+			{
+				event.preventDefault();
+				var items = Array.from(fileMenu.children);
+				var index = items.indexOf(document.activeElement);
+				items[(index + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length].focus();
+			}
+		});
+		document.body.appendChild(fileMenu);
+		fileMenu.style.left = Math.max(4, Math.min(x, window.innerWidth - fileMenu.offsetWidth - 4)) + 'px';
+		fileMenu.style.top = Math.max(4, Math.min(y, window.innerHeight - fileMenu.offsetHeight - 4)) + 'px';
+		fileMenu.firstChild.focus();
+	}
+
+	function dismissFileMenu(event)
+	{
+		if (fileMenu && !fileMenu.contains(event.target)) closeFileMenu();
+	}
+	document.addEventListener('pointerdown', dismissFileMenu, true);
 
 	function dropFile(event, destinationRelativePath, target)
 	{
@@ -284,6 +517,7 @@ Draw.loadPlugin(function(ui)
 		row.type = 'button';
 		row.style.paddingLeft = (7 + depth * 13) + 'px';
 		row.title = item.relativePath;
+		row.setAttribute('data-workspace-path', item.relativePath);
 
 		if (item.type === 'directory')
 		{
@@ -324,6 +558,8 @@ Draw.loadPlugin(function(ui)
 			row.draggable = true;
 			row.addEventListener('dragstart', function(event)
 			{
+				if (operationInProgress) { event.preventDefault(); return; }
+				closeFileMenu();
 				event.stopPropagation();
 				draggedRelativePath = item.relativePath;
 				event.dataTransfer.effectAllowed = 'move';
@@ -338,7 +574,31 @@ Draw.loadPlugin(function(ui)
 		}
 
 		row.appendChild(element('span', 'geWorkspaceRowLabel', item.name));
-		tree.appendChild(row);
+		if (item.type === 'file')
+		{
+			var entry = element('div', 'geWorkspaceEntry');
+			var more = element('button', 'geWorkspaceIconButton geWorkspaceMore', '⋯');
+			more.type = 'button';
+			more.title = '文件操作 ' + item.name;
+			more.setAttribute('aria-label', more.title);
+			more.setAttribute('aria-haspopup', 'menu');
+			more.addEventListener('click', function(event)
+			{
+				event.stopPropagation();
+				var bounds = more.getBoundingClientRect();
+				showFileMenu(item, more, bounds.left, bounds.bottom);
+			});
+			row.addEventListener('contextmenu', function(event)
+			{
+				event.preventDefault();
+				event.stopPropagation();
+				showFileMenu(item, more, event.clientX, event.clientY);
+			});
+			entry.appendChild(row);
+			entry.appendChild(more);
+			tree.appendChild(entry);
+		}
+		else tree.appendChild(row);
 
 		if (item.type === 'directory' && (searchQuery !== '' || expanded[item.relativePath] === true))
 		{
@@ -420,6 +680,7 @@ Draw.loadPlugin(function(ui)
 
 	function chooseWorkspace()
 	{
+		if (operationInProgress) return;
 		api.chooseRoot().then(function(next)
 		{
 			if (next != null)
@@ -460,6 +721,7 @@ Draw.loadPlugin(function(ui)
 
 	function openDiagram(relativePath)
 	{
+		if (operationInProgress) return;
 		api.resolveItem(relativePath).then(function(resolved)
 		{
 			var current = ui.getCurrentFile();
@@ -575,6 +837,8 @@ Draw.loadPlugin(function(ui)
 
 	ui.destroyFunctions.push(function()
 	{
+		closeFileMenu();
+		document.removeEventListener('pointerdown', dismissFileMenu, true);
 		if (graphModelListener != null)
 		{
 			ui.editor.graph.getModel().removeListener(graphModelListener);

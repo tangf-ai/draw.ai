@@ -1327,52 +1327,47 @@
 	 * Adds keyboard shortcuts for page handling.
 	 */
 	var editorUiTabCreateGap = 40;
-	var editorUiTabCreateMaxColumns = 20;
 	var editorUiTabCreateMaxRows = 100;
 
 	/**
-	 * Finds a free position to the right of a vertex, then scans a grid below it
-	 * when that position is occupied. Coordinates are local to the vertex parent.
+	 * Adds mind-map branches in one column to the right of the selected parent.
+	 * Search alternately below and above its center, avoiding existing vertices.
+	 * Geometry alone determines the next slot, including after undo or reload.
 	 */
 	function editorUiFindTabCreatePosition(graph, parent, source, width, height)
 	{
 		var sourceGeometry = graph.model.getGeometry(source);
 		var baseX = Math.round(sourceGeometry.x + sourceGeometry.width + editorUiTabCreateGap);
-		var baseY = Math.round(sourceGeometry.y);
-		var stepX = Math.max(1, Math.round(width + editorUiTabCreateGap));
-		var stepY = Math.max(1, Math.round(height + editorUiTabCreateGap));
+		var baseY = Math.round(sourceGeometry.y + (sourceGeometry.height - height) / 2);
+		var stepY = Math.max(1, Math.ceil(height + editorUiTabCreateGap));
 		var vertices = graph.getChildVertices(parent);
 
-		for (var row = 0; row < editorUiTabCreateMaxRows; row++)
+		for (var index = 0; index < editorUiTabCreateMaxRows; index++)
 		{
-			for (var column = 0; column < editorUiTabCreateMaxColumns; column++)
+			var row = (index % 2 == 1) ? (index + 1) / 2 : -index / 2;
+			var candidate = new mxRectangle(baseX, baseY + row * stepY, width, height);
+			var occupied = false;
+
+			for (var i = 0; i < vertices.length; i++)
 			{
-				var candidate = new mxRectangle(baseX + column * stepX,
-					baseY + row * stepY, width, height);
-				var occupied = false;
+				var geometry = graph.model.getGeometry(vertices[i]);
 
-				for (var i = 0; i < vertices.length; i++)
+				if (geometry != null && !geometry.relative &&
+					mxUtils.intersects(candidate, geometry))
 				{
-					var geometry = graph.model.getGeometry(vertices[i]);
-
-					if (geometry != null && !geometry.relative &&
-						mxUtils.intersects(candidate, geometry))
-					{
-						occupied = true;
-						break;
-					}
+					occupied = true;
+					break;
 				}
+			}
 
-				if (!occupied)
-				{
-					return candidate;
-				}
+			if (!occupied)
+			{
+				return candidate;
 			}
 		}
 
-		// Keep the fallback to the right of every direct child. This preserves the
-		// non-overlap guarantee even when the bounded grid is full.
-		var rightmost = baseX;
+		// Keep every fallback in the same branch column instead of extending right.
+		var bottom = baseY;
 
 		for (var j = 0; j < vertices.length; j++)
 		{
@@ -1380,11 +1375,11 @@
 
 			if (childGeometry != null && !childGeometry.relative)
 			{
-				rightmost = Math.max(rightmost, childGeometry.x + childGeometry.width + editorUiTabCreateGap);
+				bottom = Math.max(bottom, childGeometry.y + childGeometry.height + editorUiTabCreateGap);
 			}
 		}
 
-		return new mxRectangle(Math.round(rightmost), baseY, width, height);
+		return new mxRectangle(baseX, Math.ceil(bottom), width, height);
 	}
 
 	/**
@@ -1426,22 +1421,26 @@
 		{
 			vertex = graph.insertVertex(parent, null, '', position.x, position.y,
 				width, height, source.style, sourceGeometry.relative);
-			graph.insertEdge(parent, null, '', source, vertex,
-				(typeof graph.createCurrentEdgeStyle == 'function') ?
-					graph.createCurrentEdgeStyle() : null);
+			var edgeStyle = (typeof graph.createCurrentEdgeStyle == 'function') ?
+				graph.createCurrentEdgeStyle() : '';
+			graph.insertEdge(parent, null, '', source, vertex, (edgeStyle || '') +
+				';edgeStyle=orthogonalEdgeStyle;curved=1;rounded=1;exitX=1;exitY=0.5;' +
+				'entryX=0;entryY=0.5;startArrow=none;endArrow=none;');
 		}
 		finally
 		{
 			graph.model.endUpdate();
 		}
 
-		graph.setSelectionCell(vertex);
+		// Keep the parent selected so repeated Tab adds sibling branches. Selecting
+		// one of those branches explicitly makes it the parent of the next level.
+		graph.setSelectionCell(source);
 
 		return vertex;
 	}
 
 	// The graph container handles Tab before mxKeyHandler sees the event. Intercept
-	// it here so a selected vertex can create its successor instead of being moved
+	// it here so a selected vertex can create a branch instead of being moved
 	// through the normal selection order.
 	var editorUiCreateOnKeyDown = EditorUi.prototype.onKeyDown;
 	EditorUi.prototype.onKeyDown = function(evt)
