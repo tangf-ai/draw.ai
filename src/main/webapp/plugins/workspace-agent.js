@@ -31,73 +31,12 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 		return;
 	}
 
-	if (!ui.__drawioWorkspaceAgentCreateFormatPatched)
-	{
-		ui.__drawioWorkspaceAgentCreateFormatPatched = true;
-		ui.__drawioWorkspaceAgentOriginalCreateFormat = ui.createFormat;
-
-		ui.createFormat = function()
-		{
-			var format = ui.__drawioWorkspaceAgentOriginalCreateFormat.apply(this, arguments);
-
-			window.setTimeout(function()
-			{
-				if (typeof ui.__drawioWorkspaceAgentReattach === 'function')
-				{
-					ui.__drawioWorkspaceAgentReattach();
-				}
-				else
-				{
-					installWorkspaceAgent(ui);
-				}
-			}, 0);
-
-			return format;
-		};
-	}
-
-	function getActiveFormatContainer()
-	{
-		var formatWindow = ui.formatWindow != null ? ui.formatWindow.window : null;
-
-		if (formatWindow != null && formatWindow.content != null &&
-			formatWindow.content.classList != null &&
-			formatWindow.content.classList.contains('geFormatContainer'))
-		{
-			return formatWindow.content;
-		}
-
-		if (ui.formatElt != null && ui.formatElt.classList != null &&
-			ui.formatElt.classList.contains('geFormatContainer'))
-		{
-			return ui.formatElt;
-		}
-
-		var containers = document.querySelectorAll('.geFormatContainer');
-
-		for (var i = 0; i < containers.length; i++)
-		{
-			if (containers[i].offsetParent != null) return containers[i];
-		}
-
-		return ui.formatContainer;
-	}
-
 	var graph = ui.editor.graph;
-	var container = getActiveFormatContainer();
-
-	if (container == null)
-	{
-		return;
-	}
-
 	ui.__drawioWorkspaceAgentInstalled = true;
 
 	var maxContextCells = 300;
 	var maxContextPages = 12;
-	var originalChildren = Array.prototype.slice.call(container.children);
-	var originalDisplays = originalChildren.map(function(child) { return child.style.display; });
-	var currentMode = 'format';
+	var assistantOpen = false;
 	var pageScopeMode = 'current';
 	var customPageIds = [];
 	var agentState = null;
@@ -109,9 +48,7 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 	var agentGraphWasEnabled = null;
 	var agentPreparedPath = null;
 	var agentDisposed = false;
-	var normalDockedWidth = ui.formatWidth > 0 ? ui.formatWidth : 240;
-	var normalWindowWidth = ui.formatWindow != null ?
-		(parseInt(ui.formatWindow.window.div.style.width, 10) || 240) : 240;
+	var markdownFrame = null;
 
 	function createElement(tag, className, text)
 	{
@@ -125,7 +62,11 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 	{
 		var button = createElement('button', className, text);
 		button.setAttribute('type', 'button');
-		if (title) button.setAttribute('title', title);
+		if (title)
+		{
+			button.setAttribute('title', title);
+			button.setAttribute('aria-label', title);
+		}
 		return button;
 	}
 
@@ -144,49 +85,20 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 		});
 	}
 
-	var formatView = createElement('div', 'geAgentFormatView');
-
-	for (var existingIndex = 0; existingIndex < originalChildren.length; existingIndex++)
-	{
-		formatView.appendChild(originalChildren[existingIndex]);
-	}
-
-	container.appendChild(formatView);
-	container.__drawioWorkspaceAgentFormatView = formatView;
-	originalChildren = [formatView];
-	originalDisplays = [''];
-
-	if (ui.format != null && ui.format.container === container)
-	{
-		ui.format.container = formatView;
-	}
-
-	if (typeof Format !== 'undefined' && !window.__drawioWorkspaceAgentFormatRefreshPatched)
-	{
-		window.__drawioWorkspaceAgentFormatRefreshPatched = true;
-		var formatRefresh = Format.prototype.refresh;
-
-		Format.prototype.refresh = function()
-		{
-			if (this.container != null && this.container.__drawioWorkspaceAgentFormatView != null)
-			{
-				this.container = this.container.__drawioWorkspaceAgentFormatView;
-			}
-
-			return formatRefresh.apply(this, arguments);
-		};
-	}
-
 	var css = document.createElement('style');
 	css.textContent = [
-		'.geAgentPanelOpen:not(.mxWindowPane *){width:380px!important}',
-		'.geAgentPanelOpen{overflow:hidden!important;scrollbar-gutter:auto!important}',
-		'.geAgentFormatView{height:calc(100% - 36px);overflow-y:auto;scrollbar-gutter:stable;box-sizing:border-box}',
-		'.geAgentModeTabs{height:36px;display:flex;border-bottom:1px solid light-dark(#d6d9de,#454950);box-sizing:border-box;background:light-dark(#f7f8fa,#292b30)}',
-		'.geAgentModeTab{flex:1;border:0;border-right:1px solid light-dark(#d6d9de,#454950);border-radius:0;background:transparent;color:inherit;font:500 13px Arial,sans-serif;cursor:pointer;padding:0 8px}',
-		'.geAgentModeTab:last-child{border-right:0}',
-		'.geAgentModeTab.geAgentActive{background:light-dark(#fff,#1f2024);box-shadow:inset 0 -2px #1a73e8;color:light-dark(#185abc,#8ab4f8)}',
-		'.geAgentView{height:calc(100% - 36px);min-height:320px;min-width:0;display:flex;flex-direction:column;white-space:normal;background:light-dark(#fff,#202124);color:light-dark(#202124,#e8eaed);font:13px Arial,sans-serif}',
+		'.geAgentLauncher{position:fixed;right:18px;bottom:50px;z-index:40;display:flex;align-items:center;gap:8px;height:44px;padding:0 16px;border:0;border-radius:22px;background:#1a73e8;color:#fff;box-shadow:0 3px 14px #0002;cursor:pointer;font:600 13px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;transition:background .15s,transform .15s}',
+		'.geAgentLauncher:hover{background:#185abc;transform:translateY(-2px)}',
+		'.geAgentLauncher:focus-visible{outline:2px solid #1a73e8;outline-offset:3px}',
+		'.geAgentLauncher.geAgentWorking:before{content:"";width:10px;height:10px;border:2px solid #ffffff70;border-top-color:#fff;border-radius:50%;animation:geAgentSpin .8s linear infinite}',
+		'.geAgentView{position:fixed;z-index:40;right:18px;bottom:104px;width:min(420px,calc(100vw - 32px));height:min(620px,calc(100vh - 124px));min-height:0;display:flex;flex-direction:column;overflow:hidden;box-sizing:border-box;border:1px solid light-dark(#dce1e8,#454950);border-radius:14px;box-shadow:0 12px 44px #0003;background:light-dark(#fff,#202124);color:light-dark(#202124,#e8eaed);font:13px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;white-space:normal;animation:geAgentReveal .16s ease-out}',
+		'.geAgentView.geAgentExpanded{width:min(760px,calc(100vw - 32px));height:min(780px,calc(100vh - 124px))}',
+		'.geAgentHeader{display:flex;align-items:center;gap:8px;padding:8px 12px;min-height:44px;box-sizing:border-box;border-bottom:1px solid light-dark(#e8ebf0,#3c4043);background:light-dark(#fafbfd,#25272a)}',
+		'.geAgentHeaderTitle{flex:1;font-size:14px;font-weight:600}',
+		'.geAgentHeaderMark{color:light-dark(#1a73e8,#8ab4f8);font-size:19px}',
+		'.geAgentView:focus{outline:none}',
+		'@keyframes geAgentReveal{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}',
+		'@media(prefers-reduced-motion:reduce){.geAgentView,.geAgentLauncher{animation:none;transition:none}}',
 		'.geAgentToolbar{height:44px;min-height:44px;display:flex;align-items:center;gap:4px;padding:0 8px;border-bottom:1px solid light-dark(#e1e4e8,#3c4043);box-sizing:border-box}',
 		'.geAgentContext{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:light-dark(#5f6368,#bdc1c6);font-size:12px}',
 		'.geAgentScope{width:86px;min-width:86px;height:28px;border:1px solid light-dark(#c8ccd2,#5f6368);border-radius:4px;background:light-dark(#fff,#303134);color:inherit;font:12px Arial,sans-serif;padding:0 4px;cursor:pointer}',
@@ -198,6 +110,16 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 		'.geAgentEmpty{height:100%;display:flex;align-items:center;justify-content:center;color:light-dark(#80868b,#9aa0a6);font-size:12px}',
 		'.geAgentMessage{margin:0 0 14px;line-height:1.55;word-break:break-word;letter-spacing:0}',
 		'.geAgentMessageText{white-space:pre-wrap}',
+		'.geAgentMarkdown{white-space:normal;line-height:1.65;overflow-wrap:anywhere}',
+		'.geAgentMarkdown>:first-child{margin-top:0}.geAgentMarkdown>:last-child{margin-bottom:0}',
+		'.geAgentMarkdown p{margin:0 0 10px}.geAgentMarkdown strong{font-weight:650}',
+		'.geAgentMarkdown h1,.geAgentMarkdown h2,.geAgentMarkdown h3,.geAgentMarkdown h4,.geAgentMarkdown h5,.geAgentMarkdown h6{margin:16px 0 8px;font-size:14px;line-height:1.45;font-weight:650}.geAgentMarkdown h1{font-size:18px}.geAgentMarkdown h2{font-size:16px}',
+		'.geAgentMarkdown ul,.geAgentMarkdown ol{margin:7px 0 12px;padding-left:22px}.geAgentMarkdown li{margin:4px 0}.geAgentMarkdown li p{margin:4px 0}',
+		'.geAgentMarkdown code{padding:2px 4px;border-radius:4px;background:light-dark(#f0f3f7,#31353b);font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace}',
+		'.geAgentMarkdown pre{overflow:auto;max-width:100%;padding:12px;border-radius:7px;background:light-dark(#f5f7fa,#282c32)}.geAgentMarkdown pre code{padding:0;background:transparent;white-space:pre}',
+		'.geAgentMarkdown blockquote{margin:10px 0;padding:2px 12px;border-left:3px solid light-dark(#b8c9e3,#566987);color:light-dark(#5f6368,#bdc1c6)}',
+		'.geAgentMarkdown table{display:block;max-width:100%;overflow:auto;border-collapse:collapse;margin:10px 0;font-size:12px}.geAgentMarkdown th,.geAgentMarkdown td{padding:7px 10px;border:1px solid light-dark(#dfe3e8,#454950);text-align:left}.geAgentMarkdown th{background:light-dark(#f5f7fa,#282c32);font-weight:600}',
+		'.geAgentMarkdown a{color:light-dark(#1a73e8,#8ab4f8);text-decoration:underline;text-underline-offset:2px;cursor:pointer}.geAgentMarkdown hr{border:0;border-top:1px solid light-dark(#e1e4e8,#454950);margin:14px 0}',
 		'.geAgentMessageUser{position:relative;margin-left:34px;padding:8px 10px;border-radius:6px;background:light-dark(#eef4ff,#2b3b55)}',
 		'.geAgentMessageAssistant{padding-left:10px;border-left:3px solid light-dark(#188038,#81c995)}',
 		'.geAgentMessageError{border-left-color:light-dark(#b3261e,#f28b82);color:light-dark(#b3261e,#f28b82)}',
@@ -210,7 +132,7 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 		'.geAgentRunHeader{display:flex;align-items:center;gap:8px;min-height:20px;font-weight:600}',
 		'.geAgentSpinner{width:12px;height:12px;flex:none;border:2px solid light-dark(#b5bac1,#6b7076);border-top-color:#1a73e8;border-radius:50%;box-sizing:border-box;animation:geAgentSpin .8s linear infinite}',
 		'.geAgentReasoning{margin:6px 0 0 20px;color:light-dark(#70757a,#9aa0a6);font-size:11px;line-height:1.45;white-space:pre-wrap}',
-		'.geAgentStream{margin:8px 0 0 20px;line-height:1.5;white-space:pre-wrap}',
+		'.geAgentStream{margin:8px 0 0 20px;line-height:1.6}',
 		'.geAgentActivities{display:flex;flex-direction:column;gap:4px;margin:8px 0 0 20px}',
 		'.geAgentActivity{position:relative;padding-left:16px;color:light-dark(#5f6368,#bdc1c6);font-size:11px;line-height:1.4;word-break:break-word}',
 		'.geAgentActivity:before{content:"";position:absolute;left:1px;top:4px;width:7px;height:7px;border:2px solid light-dark(#b5bac1,#6b7076);border-radius:50%;box-sizing:border-box}',
@@ -261,14 +183,20 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 	].join('');
 	document.head.appendChild(css);
 
-	var modeTabs = createElement('div', 'geAgentModeTabs');
-	var formatTab = createButton('geAgentModeTab geAgentActive', '格式');
-	var agentTab = createButton('geAgentModeTab', 'Agent');
-	modeTabs.appendChild(formatTab);
-	modeTabs.appendChild(agentTab);
-	container.insertBefore(modeTabs, container.firstChild);
-
-	var agentView = createElement('div', 'geAgentView geAgentHidden');
+	var agentLauncher = createButton('geAgentLauncher', '✦ AI 助手', '打开 AI 助手');
+	agentLauncher.setAttribute('aria-expanded', 'false');
+	agentLauncher.setAttribute('aria-controls', 'geAgentFloatingAssistant');
+	var agentView = createElement('section', 'geAgentView geAgentHidden');
+	agentView.id = 'geAgentFloatingAssistant';
+	agentView.setAttribute('aria-label', 'AI 助手');
+	var agentHeader = createElement('div', 'geAgentHeader');
+	agentHeader.appendChild(createElement('span', 'geAgentHeaderMark', '✦'));
+	agentHeader.appendChild(createElement('div', 'geAgentHeaderTitle', 'AI 助手'));
+	var agentExpandButton = createButton('geAgentIconBtn', '↗', '放大 AI 助手');
+	var agentCloseButton = createButton('geAgentIconBtn', '×', '收起 AI 助手');
+	agentHeader.appendChild(agentExpandButton);
+	agentHeader.appendChild(agentCloseButton);
+	agentView.appendChild(agentHeader);
 	var agentToolbar = createElement('div', 'geAgentToolbar');
 	var agentContextLabel = createElement('div', 'geAgentContext', '当前页');
 	var agentPageScopeSelect = createElement('select', 'geAgentScope');
@@ -313,98 +241,99 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 	agentComposer.appendChild(agentComposerRow);
 	agentComposer.appendChild(agentComposerStatus);
 	agentView.appendChild(agentComposer);
-	container.appendChild(agentView);
+	document.body.appendChild(agentView);
+	document.body.appendChild(agentLauncher);
 
-	function resizePanel(agentMode)
+	function renderAgentMarkdown(element, text)
 	{
-		container.classList.toggle('geAgentPanelOpen', agentMode);
-
-		if (ui.formatWindow != null && ui.formatWindow.window != null)
+		element.__agentMarkdownSource = String(text || '');
+		element.classList.add('geAgentMarkdown');
+		if (window.marked == null || window.DOMPurify == null)
 		{
-			var windowObject = ui.formatWindow.window;
-			var height = parseInt(windowObject.div.style.height, 10) || 600;
-			var width = agentMode ? Math.max(380, normalWindowWidth) : normalWindowWidth;
-			windowObject.setSize(width, height);
-			windowObject.fit();
-		}
-		else
-		{
-			ui.formatWidth = agentMode ? 380 : normalDockedWidth;
-			ui.refresh(true);
-		}
-	}
-
-	function showMode(mode)
-	{
-		currentMode = mode === 'agent' ? 'agent' : 'format';
-		var formatMode = currentMode === 'format';
-
-		for (var i = 0; i < originalChildren.length; i++)
-		{
-			originalChildren[i].style.display = formatMode ? originalDisplays[i] : 'none';
-		}
-
-		agentView.classList.toggle('geAgentHidden', formatMode);
-		formatTab.classList.toggle('geAgentActive', formatMode);
-		agentTab.classList.toggle('geAgentActive', !formatMode);
-		resizePanel(!formatMode);
-
-		if (!formatMode)
-		{
-			updateContextLabel();
-			loadAgentState();
-			window.setTimeout(function() { agentInput.focus(); }, 0);
-		}
-		else if (ui.format != null)
-		{
-			ui.format.refresh();
-		}
-	}
-
-	function reattachPanel()
-	{
-		var nextContainer = getActiveFormatContainer();
-
-		if (nextContainer == null || (nextContainer === container && modeTabs.parentNode === nextContainer))
-		{
+			element.textContent = element.__agentMarkdownSource;
 			return;
 		}
 
-		container.classList.remove('geAgentPanelOpen');
-
-		if (container.__drawioWorkspaceAgentFormatView === formatView)
+		try
 		{
-			delete container.__drawioWorkspaceAgentFormatView;
-		}
-
-		if (modeTabs.parentNode != null) modeTabs.parentNode.removeChild(modeTabs);
-		if (agentView.parentNode != null) agentView.parentNode.removeChild(agentView);
-
-		container = nextContainer;
-		var nextChildren = Array.prototype.slice.call(container.children);
-		formatView = createElement('div', 'geAgentFormatView');
-
-		for (var i = 0; i < nextChildren.length; i++)
-		{
-			if (nextChildren[i] !== modeTabs && nextChildren[i] !== agentView)
+			var html = window.marked.parse(element.__agentMarkdownSource,
+				{gfm: true, breaks: true, async: false});
+			element.innerHTML = window.DOMPurify.sanitize(html, {
+				ALLOWED_TAGS: ['p', 'br', 'strong', 'em', 'del', 's', 'h1', 'h2', 'h3', 'h4', 'h5',
+					'h6', 'ul', 'ol', 'li', 'blockquote', 'pre', 'code', 'hr', 'table', 'thead',
+					'tbody', 'tr', 'th', 'td', 'a'],
+				ALLOWED_ATTR: ['href', 'title', 'start'], ALLOW_DATA_ATTR: false, ALLOW_ARIA_ATTR: false
+			});
+			Array.prototype.forEach.call(element.querySelectorAll('a'), function(link)
 			{
-				formatView.appendChild(nextChildren[i]);
-			}
+				if (!/^(https?:\/\/|mailto:)/i.test(link.getAttribute('href') || ''))
+				{
+					link.removeAttribute('href');
+				}
+			});
 		}
-
-		container.appendChild(formatView);
-		container.__drawioWorkspaceAgentFormatView = formatView;
-		originalChildren = [formatView];
-		originalDisplays = [''];
-
-		if (ui.format != null && ui.format.container === container)
+		catch (error)
 		{
-			ui.format.container = formatView;
+			element.textContent = element.__agentMarkdownSource;
 		}
+	}
 
-		container.insertBefore(modeTabs, container.firstChild);
-		container.appendChild(agentView);
-		showMode(currentMode);
+	if (window.__drawAiMarkdownReady == null)
+	{
+		window.__drawAiMarkdownReady = new Promise(function(resolve)
+		{
+			if (window.marked != null) { resolve(); return; }
+			var script = document.createElement('script');
+			script.src = './js/marked/marked.umd.js';
+			script.onload = resolve;
+			script.onerror = resolve;
+			document.head.appendChild(script);
+		});
+	}
+	window.__drawAiMarkdownReady.then(function()
+	{
+		if (agentDisposed) return;
+		Array.prototype.forEach.call(agentView.querySelectorAll('.geAgentMarkdown'), function(element)
+		{
+			renderAgentMarkdown(element, element.__agentMarkdownSource);
+		});
+	});
+	agentView.addEventListener('click', function(event)
+	{
+		var link = event.target.closest != null ? event.target.closest('a') : null;
+		if (link == null || !agentView.contains(link)) return;
+		event.preventDefault();
+		var href = link.getAttribute('href') || '';
+		if (/^(https?:\/\/|mailto:)/i.test(href))
+		{
+			request('openExternal', {url: href}).catch(function(error)
+			{
+				addAgentMessage({role: 'assistant', text: error.message || '链接打开失败'}, true);
+			});
+		}
+	});
+
+	function setAssistantOpen(open)
+	{
+		assistantOpen = open === true;
+		agentView.classList.toggle('geAgentHidden', !assistantOpen);
+		agentLauncher.setAttribute('aria-expanded', String(assistantOpen));
+		agentLauncher.title = assistantOpen ? '收起 AI 助手' : '打开 AI 助手';
+		if (assistantOpen)
+		{
+			updateContextLabel();
+			loadAgentState().then(function()
+			{
+				if (assistantOpen && !agentDisposed && !agentInput.disabled) agentInput.focus();
+			});
+		}
+		else agentLauncher.focus();
+	}
+
+	function ensureFloatingPanel()
+	{
+		if (agentView.parentNode !== document.body) document.body.appendChild(agentView);
+		if (agentLauncher.parentNode !== document.body) document.body.appendChild(agentLauncher);
 	}
 
 	function plainLabel(cell)
@@ -782,6 +711,7 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 
 	function updateAgentControls()
 	{
+		agentLauncher.classList.toggle('geAgentWorking', agentBusy);
 		agentComposerStatus.textContent = agentStatusText();
 		agentSendButton.disabled = agentLoading ||
 			(agentState != null && agentState.configured === false);
@@ -805,7 +735,7 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 		var dialog = createElement('div', 'geAgentProfileDialog');
 		var title = createElement('div', 'geAgentProfileTitle', 'Agent 模型配置');
 		var hint = createElement('div', 'geAgentProfileHint',
-			'配置 Pi 命令和模型名称。模型留空时使用 Pi 的默认模型，保存后对下一轮任务生效。');
+			'选择 Pi 中可用的模型，或使用默认模型。保存后对下一轮任务生效。');
 		var commandField = createElement('div', 'geAgentProfileField');
 		var commandLabel = createElement('label', null, 'Pi 命令');
 		var commandInput = createElement('input', 'geAgentProfileInput');
@@ -818,7 +748,8 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 		commandField.appendChild(commandLabel);
 		commandField.appendChild(commandInput);
 		var modelField = createElement('div', 'geAgentProfileField');
-		var modelLabel = createElement('label', null, '模型名称');
+		var modelLabel = createElement('label', null, '模型');
+		var modelSelect = createElement('select', 'geAgentProfileInput');
 		var modelInput = createElement('input', 'geAgentProfileInput');
 		modelInput.type = 'text';
 		modelInput.autocomplete = 'off';
@@ -826,9 +757,104 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 		modelInput.placeholder = '例如 provider/模型，如 m4/gpt-5.6-sol';
 		modelInput.value = agentState != null && agentState.model ? agentState.model : '';
 		modelLabel.htmlFor = 'geAgentPiModel';
-		modelInput.id = 'geAgentPiModel';
+		modelSelect.id = 'geAgentPiModel';
+		modelInput.id = 'geAgentPiCustomModel';
+		modelInput.setAttribute('aria-label', '自定义模型名称');
 		modelField.appendChild(modelLabel);
+		modelField.appendChild(modelSelect);
 		modelField.appendChild(modelInput);
+		var modelStatus = createElement('div', 'geAgentProfileHint');
+		modelStatus.setAttribute('role', 'status');
+		var refreshButton = createButton('geAgentButton', '刷新模型');
+		var models = [];
+		var loadVersion = 0;
+		var profileEdited = false;
+
+		function selectedModel()
+		{
+			return modelSelect.value === '__custom__' ? modelInput.value : modelSelect.value;
+		}
+
+		function updateCustomInput()
+		{
+			modelInput.style.display = modelSelect.value === '__custom__' ? '' : 'none';
+		}
+
+		function renderModels(value, custom)
+		{
+			modelSelect.textContent = '';
+			var defaultOption = createElement('option', null, '使用 Pi 默认模型');
+			defaultOption.value = '';
+			modelSelect.appendChild(defaultOption);
+			var groups = Object.create(null);
+			var found = value === '';
+
+			models.forEach(function(model)
+			{
+				var group = groups[model.provider];
+				if (group == null)
+				{
+					group = createElement('optgroup');
+					group.label = model.provider;
+					groups[model.provider] = group;
+					modelSelect.appendChild(group);
+				}
+				var option = createElement('option', null,
+					model.name === model.id ? model.id : model.name + ' (' + model.id + ')');
+				option.value = model.provider + '/' + model.id;
+				if (option.value === value) found = true;
+				group.appendChild(option);
+			});
+
+			if (!found && !custom)
+			{
+				var currentOption = createElement('option', null, '当前配置：' + value);
+				currentOption.value = value;
+				modelSelect.appendChild(currentOption);
+			}
+			var customOption = createElement('option', null, '手动输入模型…');
+			customOption.value = '__custom__';
+			modelSelect.appendChild(customOption);
+			modelSelect.value = custom ? '__custom__' : value;
+			updateCustomInput();
+		}
+
+		function loadModels()
+		{
+			var version = ++loadVersion;
+			models = [];
+			renderModels(selectedModel(), modelSelect.value === '__custom__');
+			modelStatus.textContent = '正在读取可用模型…';
+			refreshButton.disabled = true;
+			request('workspaceAgentListModels', {command: commandInput.value}).then(function(result)
+			{
+				if (version !== loadVersion) return;
+				models = result.models || [];
+				renderModels(selectedModel(), modelSelect.value === '__custom__');
+				modelStatus.textContent = models.length > 0 ? '已加载 ' + models.length + ' 个可用模型' :
+					'Pi 暂无可用模型，可使用默认模型或手动输入。';
+			}).catch(function(loadError)
+			{
+				if (version !== loadVersion) return;
+				modelStatus.textContent = '模型列表读取失败：' + (loadError.message || '请检查 Pi 命令') +
+					'。可重试或手动输入。';
+			}).then(function()
+			{
+				if (version === loadVersion) refreshButton.disabled = false;
+			});
+		}
+
+		renderModels(modelInput.value, false);
+		modelSelect.addEventListener('change', function()
+		{
+			profileEdited = true;
+			updateCustomInput();
+			if (modelSelect.value === '__custom__') modelInput.focus();
+		});
+		modelInput.addEventListener('input', function() { profileEdited = true; });
+		commandInput.addEventListener('input', function() { profileEdited = true; });
+		commandInput.addEventListener('change', loadModels);
+		refreshButton.addEventListener('click', loadModels);
 		var error = createElement('div', 'geAgentProfileError');
 		var actions = createElement('div', 'geAgentProfileActions');
 		var cancelButton = createButton('geAgentButton', '取消');
@@ -841,7 +867,7 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 			saveButton.disabled = true;
 			request('workspaceAgentSetProfile', {profile: {
 				command: commandInput.value,
-				model: modelInput.value
+				model: selectedModel()
 			}}).then(function(profile)
 			{
 				agentState = Object.assign({}, agentState || {}, profile);
@@ -856,19 +882,23 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 		});
 		actions.appendChild(cancelButton);
 		actions.appendChild(saveButton);
+		actions.insertBefore(refreshButton, cancelButton);
 		dialog.appendChild(title);
 		dialog.appendChild(hint);
 		dialog.appendChild(commandField);
 		dialog.appendChild(modelField);
+		dialog.appendChild(modelStatus);
 		dialog.appendChild(error);
 		dialog.appendChild(actions);
-		ui.showDialog(dialog, 400, 300, true, true);
+		ui.showDialog(dialog, 440, 390, true, true);
 		request('workspaceAgentGetProfile').then(function(profile)
 		{
+			if (profileEdited) return;
 			agentState = Object.assign({}, agentState || {}, profile);
 			commandInput.value = profile.command || 'pi';
 			modelInput.value = profile.model || '';
-		}).catch(function() {});
+			renderModels(modelInput.value, false);
+		}).catch(function() {}).then(loadModels);
 		window.setTimeout(function() { commandInput.focus(); commandInput.select(); }, 0);
 	}
 
@@ -929,7 +959,10 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 		var node = createElement('div', 'geAgentMessage ' +
 			(role === 'user' ? 'geAgentMessageUser' : 'geAgentMessageAssistant') +
 			(error ? ' geAgentMessageError' : ''));
-		node.appendChild(createElement('div', 'geAgentMessageText', message.text || ''));
+		var body = createElement('div', 'geAgentMessageText');
+		if (role === 'assistant') renderAgentMarkdown(body, message.text);
+		else body.textContent = message.text || '';
+		node.appendChild(body);
 		var metaParts = [];
 
 		if (message.steered === true) metaParts.push('补充要求');
@@ -968,6 +1001,8 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 
 	function renderAgentHistory(items)
 	{
+		if (markdownFrame != null) window.cancelAnimationFrame(markdownFrame);
+		markdownFrame = null;
 		agentMessages.textContent = '';
 		agentRun = null;
 		agentActivities = {};
@@ -1130,7 +1165,16 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 		}
 		else if (event.type === 'message-delta')
 		{
-			run.stream.textContent += event.delta || '';
+			run.stream.__agentMarkdownSource = (run.stream.__agentMarkdownSource || '') + (event.delta || '');
+			if (markdownFrame == null)
+			{
+				markdownFrame = window.requestAnimationFrame(function()
+				{
+					markdownFrame = null;
+					if (!agentDisposed) renderAgentMarkdown(run.stream, run.stream.__agentMarkdownSource);
+					scrollAgentMessages();
+				});
+			}
 			run.stream.classList.remove('geAgentHidden');
 		}
 		else if (event.type === 'reasoning')
@@ -1444,8 +1488,21 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 		}
 	}
 
-	formatTab.addEventListener('click', function() { showMode('format'); });
-	agentTab.addEventListener('click', function() { showMode('agent'); });
+	agentLauncher.addEventListener('click', function() { setAssistantOpen(!assistantOpen); });
+	agentCloseButton.addEventListener('click', function() { setAssistantOpen(false); });
+	agentExpandButton.addEventListener('click', function()
+	{
+		var expanded = agentView.classList.toggle('geAgentExpanded');
+		agentExpandButton.textContent = expanded ? '↙' : '↗';
+		agentExpandButton.title = expanded ? '缩小 AI 助手' : '放大 AI 助手';
+		agentExpandButton.setAttribute('aria-label', agentExpandButton.title);
+	});
+	// Keep assistant input and text selection independent of canvas shortcuts.
+	['mousedown', 'pointerdown', 'keydown', 'keyup', 'contextmenu'].forEach(function(type)
+	{
+		agentView.addEventListener(type, function(event) { event.stopPropagation(); });
+		agentLauncher.addEventListener(type, function(event) { event.stopPropagation(); });
+	});
 	agentPageScopeSelect.addEventListener('change', handlePageScopeChange);
 	agentSendButton.addEventListener('click', sendAgentPrompt);
 	agentNewThreadButton.addEventListener('click', newAgentThread);
@@ -1458,10 +1515,18 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 	});
 	agentInput.addEventListener('keydown', function(event)
 	{
-		if (event.key === 'Enter' && !event.shiftKey)
+		if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229)
 		{
 			event.preventDefault();
 			sendAgentPrompt();
+		}
+	});
+	agentView.addEventListener('keydown', function(event)
+	{
+		if (event.key === 'Escape' && !event.isComposing && ui.dialog == null)
+		{
+			event.preventDefault();
+			setAssistantOpen(false);
 		}
 	});
 
@@ -1472,32 +1537,21 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 	ui.editor.addListener('pagesPatched', updateContextLabel);
 	ui.editor.addListener('fileLoaded', function()
 	{
-		reattachPanel();
+		ensureFloatingPanel();
 		updateContextLabel();
 	});
-	ui.addListener('themeInitialized', reattachPanel);
+	ui.addListener('themeInitialized', ensureFloatingPanel);
 	ui.addListener('currentPageChanged', updateContextLabel);
-	ui.__drawioWorkspaceAgentReattach = reattachPanel;
 	loadAgentState();
-
-	var attachChecks = 0;
-	var attachTimer = window.setInterval(function()
-	{
-		attachChecks++;
-		reattachPanel();
-		if (attachChecks >= 50) window.clearInterval(attachTimer);
-	}, 100);
 
 	ui.destroyFunctions.push(function()
 	{
 		agentDisposed = true;
+		if (markdownFrame != null) window.cancelAnimationFrame(markdownFrame);
 		if (agentBusy && agentGraphWasEnabled) graph.setEnabled(true);
-		window.clearInterval(attachTimer);
-		ui.createFormat = ui.__drawioWorkspaceAgentOriginalCreateFormat;
-		delete ui.__drawioWorkspaceAgentReattach;
+		if (agentView.parentNode != null) agentView.parentNode.removeChild(agentView);
+		if (agentLauncher.parentNode != null) agentLauncher.parentNode.removeChild(agentLauncher);
 		delete ui.__drawioWorkspaceAgentInstalled;
-		delete ui.__drawioWorkspaceAgentCreateFormatPatched;
-		delete ui.__drawioWorkspaceAgentOriginalCreateFormat;
 		if (css.parentNode != null) css.parentNode.removeChild(css);
 	});
 });
