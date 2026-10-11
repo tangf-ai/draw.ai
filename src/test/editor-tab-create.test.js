@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'fs/promises';
 import path from 'path';
 import {fileURLToPath} from 'url';
+import {runInNewContext} from 'node:vm';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -22,7 +23,209 @@ test('Tab creates a linked, non-overlapping vertex from one selected shape', asy
 	assert.match(editorUi, /graph\.insertEdge\(parent, null, ''/);
 	assert.match(editorUi, /evt\.keyCode == 9 && !evt\.shiftKey && !evt\.ctrlKey/);
 	assert.match(editorUi, /!evt\.metaKey && !evt\.altKey/);
-	assert.match(editorUi, /graph\.setSelectionCell\(vertex\)/);
+	assert.match(editorUi, /graph\.setSelectionCell\(source\)/);
 	assert.match(appBundle, /draw\.ai Tab creates a linked vertex/);
 	assert.match(appBundle, /function createTabVertex\(graph\)/);
 });
+
+function intersects(a, b)
+{
+	return a.x < b.x + b.width && b.x < a.x + a.width &&
+		a.y < b.y + b.height && b.y < a.y + a.height;
+}
+
+async function loadTabHandler(bundle)
+{
+	const text = await readFile(path.join(projectRoot, 'drawio/src/main/webapp/js/',
+		bundle ? 'app.min.js' : 'diagramly/EditorUi.js'), 'utf8');
+	const start = text.indexOf(bundle ? '\tvar gap = 40;' : '\tvar editorUiTabCreateGap = 40;');
+	const end = text.indexOf(bundle ? '\n\tvar originalCreateKeyHandler' :
+		'\n    var editorUiCreateKeyHandler', start);
+	function EditorUi() {}
+	EditorUi.prototype.onKeyDown = function() { this.fallbackCalls++; };
+	runInNewContext(text.slice(start, end), {
+		EditorUi,
+		mxRectangle: class
+		{
+			constructor(x, y, width, height) { Object.assign(this, {x, y, width, height}); }
+		},
+		mxUtils: {intersects},
+		mxEvent: {consume: (evt) => { evt.consumed = true; }}
+	});
+	return EditorUi;
+}
+
+function fixture(EditorUi, {canvasWidth = 2000, scale = 1, translateX = 0,
+	parentX = 0, scrollLeft = 0, x = 100, y = 100, width = 120, height = 60} = {})
+{
+	const parent = {};
+	const source = {vertex: true, parent, style: 'rounded=1;', geometry: {x, y, width, height}};
+	const vertices = [source];
+	const edges = [];
+	let selection = [source];
+	let updates = 0;
+	const graph = {
+		container: {clientWidth: canvasWidth, scrollLeft},
+		view: {scale, translate: {x: translateX}, getState: () => ({origin: {x: parentX}})},
+		model: {
+			getGeometry: (cell) => cell.geometry,
+			getParent: (cell) => cell.parent,
+			isVertex: (cell) => cell.vertex,
+			beginUpdate: () => { updates++; },
+			endUpdate: () => { updates--; }
+		},
+		getSelectionCells: () => selection,
+		getChildVertices: (p) => vertices.filter((v) => v.parent === p),
+		isEditing: () => false,
+		isEnabled: () => true,
+		isCellLocked: (cell) => !!cell.locked,
+		setSelectionCell: (cell) => { selection = [cell]; },
+		createCurrentEdgeStyle: () => 'edgeStyle=orthogonalEdgeStyle;',
+		insertVertex: (p, id, value, vx, vy, w, h, style) =>
+		{
+			const vertex = {vertex: true, parent: p, value, style,
+				geometry: {x: vx, y: vy, width: w, height: h}};
+			vertices.push(vertex);
+			return vertex;
+		},
+		insertEdge: (p, id, value, from, to, style) => { edges.push({from, to, style}); }
+	};
+	const ui = new EditorUi();
+	ui.editor = {graph};
+	ui.fallbackCalls = 0;
+	return {graph, ui, source, parent, vertices, edges,
+		get updates() { return updates; },
+		tab: (modifiers = {}) =>
+		{
+			const evt = {keyCode: 9, ...modifiers};
+			ui.onKeyDown(evt);
+			return evt;
+		}};
+}
+
+for (const bundle of [false, true])
+{
+	const variant = bundle ? 'production bundle' : 'editor source';
+
+	test(`${variant}: repeated Tab adds branches above and below the same parent`, async () =>
+	{
+		const f = fixture(await loadTabHandler(bundle));
+		for (let i = 0; i < 19; i++) assert.equal(f.tab().consumed, true);
+		assert.deepEqual(f.vertices.slice(1, 6).map((v) => [v.geometry.x, v.geometry.y]),
+			[[260, 100], [260, 200], [260, 0], [260, 300], [260, -100]]);
+		assert.equal(f.edges.length, 19);
+		assert.equal(f.updates, 0);
+		assert.equal(f.graph.getSelectionCells()[0], f.source);
+		for (let i = 0; i < f.edges.length; i++)
+		{
+			assert.equal(f.edges[i].from, f.source);
+			assert.equal(f.edges[i].to, f.vertices[i + 1]);
+			assert.equal(f.vertices[i + 1].style, f.source.style);
+			assert.equal(f.vertices[i + 1].geometry.x, 260);
+			assert.match(f.edges[i].style, /curved=1/);
+			assert.match(f.edges[i].style, /exitX=1;exitY=0.5/);
+			assert.match(f.edges[i].style, /entryX=0;entryY=0.5/);
+			assert.match(f.edges[i].style, /startArrow=none;endArrow=none/);
+		}
+		for (const [i, vertex] of f.vertices.entries())
+		{
+			for (const other of f.vertices.slice(i + 1))
+				assert.equal(intersects(vertex.geometry, other.geometry), false);
+		}
+	});
+
+	test(`${variant}: branch columns use parent coordinates regardless of viewport`, async () =>
+	{
+		const EditorUi = await loadTabHandler(bundle);
+		for (const options of [
+			{canvasWidth: 440},
+			{canvasWidth: 880, scale: 2},
+			{canvasWidth: 640, translateX: 100, parentX: 100},
+			{canvasWidth: 240, scrollLeft: 200}
+		])
+		{
+			const f = fixture(EditorUi, options);
+			for (let i = 0; i < 5; i++) f.tab();
+			assert.deepEqual(f.vertices.slice(1).map((v) => [v.geometry.x, v.geometry.y]),
+				[[260, 100], [260, 200], [260, 0], [260, 300], [260, -100]]);
+		}
+	});
+
+	test(`${variant}: occupied slots and a full search area stay in the right column`, async () =>
+	{
+		const EditorUi = await loadTabHandler(bundle);
+		const f = fixture(EditorUi);
+		const obstacle = f.graph.insertVertex(f.parent, null, '', 260, 100, 120, 60, '');
+		f.tab();
+		assert.deepEqual(f.vertices.at(-1).geometry, {x: 260, y: 200, width: 120, height: 60});
+		assert.equal(intersects(f.vertices.at(-1).geometry, obstacle.geometry), false);
+		const full = fixture(EditorUi);
+		full.graph.insertVertex(full.parent, null, '', 260, -10000, 120, 20000, '');
+		full.tab();
+		assert.deepEqual(full.vertices.at(-1).geometry, {x: 260, y: 10040, width: 120, height: 60});
+		full.tab();
+		assert.deepEqual(full.vertices.at(-1).geometry, {x: 260, y: 10140, width: 120, height: 60});
+	});
+
+	test(`${variant}: undo and reload fill the free slot without transient layout state`, async () =>
+	{
+		const f = fixture(await loadTabHandler(bundle));
+		for (let i = 0; i < 4; i++) f.tab();
+		const removed = f.vertices.pop();
+		f.edges.pop();
+		f.tab();
+		assert.deepEqual(f.vertices.at(-1).geometry, removed.geometry);
+		const ReloadedUi = await loadTabHandler(bundle);
+		const reloaded = new ReloadedUi();
+		reloaded.editor = {graph: f.graph};
+		reloaded.onKeyDown({keyCode: 9});
+		assert.deepEqual(f.vertices.at(-1).geometry, {x: 260, y: -100, width: 120, height: 60});
+	});
+
+	test(`${variant}: selecting a child starts the next level without moving existing branches`, async () =>
+	{
+		const f = fixture(await loadTabHandler(bundle));
+		for (let i = 0; i < 3; i++) f.tab();
+		const original = f.vertices.map((v) => ({...v.geometry}));
+		const child = f.vertices[1];
+		f.graph.setSelectionCell(child);
+		for (let i = 0; i < 3; i++) f.tab();
+		assert.deepEqual(f.vertices.slice(4).map((v) => [v.geometry.x, v.geometry.y]),
+			[[420, 100], [420, 200], [420, 0]]);
+		assert.equal(f.graph.getSelectionCells()[0], child);
+		for (const edge of f.edges.slice(3)) assert.equal(edge.from, child);
+		assert.deepEqual(f.vertices.slice(0, 4).map((v) => v.geometry), original);
+		child.geometry.x = 1000;
+		child.geometry.y = 1000;
+		f.tab();
+		assert.deepEqual(f.vertices.at(-1).geometry, {x: 1160, y: 1000, width: 120, height: 60});
+	});
+
+	test(`${variant}: editing, locks and modified Tab preserve existing keyboard behavior`, async () =>
+	{
+		const EditorUi = await loadTabHandler(bundle);
+		for (const modifier of ['shiftKey', 'ctrlKey', 'metaKey', 'altKey'])
+		{
+			const f = fixture(EditorUi);
+			assert.equal(f.tab({[modifier]: true}).consumed, undefined);
+			assert.equal(f.vertices.length, 1);
+			assert.equal(f.ui.fallbackCalls, 1);
+		}
+		for (const block of [
+			(f) => { f.graph.isEditing = () => true; },
+			(f) => { f.graph.isEnabled = () => false; },
+			(f) => { f.source.locked = true; },
+			(f) => { f.parent.locked = true; },
+			(f) => { f.source.geometry.relative = true; },
+			(f) => { f.graph.getSelectionCells = () => []; },
+			(f) => { f.graph.getSelectionCells = () => [f.source, f.source]; },
+			(f) => { f.source.vertex = false; }
+		])
+		{
+			const f = fixture(EditorUi);
+			block(f);
+			assert.equal(f.tab().consumed, undefined);
+			assert.equal(f.vertices.length, 1);
+		}
+	});
+}

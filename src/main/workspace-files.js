@@ -908,11 +908,11 @@ export async function getWorkspaceItem(root, relativePath)
 	};
 }
 
-async function getWorkspaceFileForTransfer(root, relativePath)
+export async function getWorkspaceFile(root, relativePath)
 {
 	const item = await getWorkspaceItem(root, relativePath);
 	const inputRelativePath = relativePath.split(/[\\/]+/).join('/');
-	const hasHiddenSegment = inputRelativePath.split('/').some(segment => segment.startsWith('.'));
+	const hasHiddenSegment = inputRelativePath.split('/').some(shouldIgnoreEntry);
 	const extension = path.extname(item.absolutePath).toLowerCase();
 
 	if (item.type !== 'file' || item.relativePath !== inputRelativePath || hasHiddenSegment ||
@@ -964,7 +964,7 @@ async function nextAvailableCopyDestination(directory, fileName)
 
 export async function moveWorkspaceFile(root, relativePath, destinationRelativePath)
 {
-	const source = await getWorkspaceFileForTransfer(root, relativePath);
+	const source = await getWorkspaceFile(root, relativePath);
 	const destinationDirectory = await getDirectory(root, destinationRelativePath);
 	const destination = await resolveWorkspacePath(destinationDirectory.root,
 		path.join(toRelative(destinationDirectory.root, destinationDirectory.target), path.basename(source.absolutePath)),
@@ -982,7 +982,7 @@ export async function moveWorkspaceFile(root, relativePath, destinationRelativeP
 
 export async function copyWorkspaceFile(root, relativePath, destinationRelativePath)
 {
-	const source = await getWorkspaceFileForTransfer(root, relativePath);
+	const source = await getWorkspaceFile(root, relativePath);
 	const destinationDirectory = await getDirectory(root, destinationRelativePath);
 	let destination = await nextAvailableCopyDestination(destinationDirectory.target, path.basename(source.absolutePath));
 

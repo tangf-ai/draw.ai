@@ -7,6 +7,7 @@ import {
 	createWorkspaceDirectory,
 	ensureWorkspaceTemplate,
 	getWorkspaceItem,
+	getWorkspaceFile,
 	getWorkspaceTemplatePath,
 	importWorkspaceTemplate,
 	importWorkspaceFiles,
@@ -15,6 +16,7 @@ import {
 	renameWorkspaceItem,
 	moveWorkspaceFile,
 	updateWorkspaceTemplateFromSource,
+	validateWorkspaceName,
 	WORKSPACE_FILE_EXTENSIONS
 } from './workspace-files.js';
 
@@ -173,6 +175,13 @@ export function createWorkspaceController(dependencies)
 		}
 	}
 
+	function getActionRoot(expectedRoot)
+	{
+		const root = store?.get(WORKSPACE_ROOT_KEY);
+		if (expectedRoot != null && expectedRoot !== root) throw new Error('工作区已切换，请刷新后重试');
+		return root;
+	}
+
 	function handle(channel, action)
 	{
 		ipcMain.handle(channel, async (event, ...args) =>
@@ -232,16 +241,40 @@ export function createWorkspaceController(dependencies)
 		return {state: await getState(), renamedRelativePath: renamedRelativePath};
 	});
 
-	handle('workspace:move-file', async (event, relativePath, destinationRelativePath) =>
+	handle('workspace:move-file', async (event, relativePath, destinationRelativePath, expectedRoot) =>
 	{
-		const root = store?.get(WORKSPACE_ROOT_KEY);
+		const root = getActionRoot(expectedRoot);
 		const movedRelativePath = await moveWorkspaceFile(root, relativePath, destinationRelativePath);
-		return {state: await getState(), movedRelativePath: movedRelativePath};
+		const item = await getWorkspaceFile(root, movedRelativePath);
+		authorizePath?.(item.absolutePath);
+		return {state: await getState(), movedRelativePath: movedRelativePath, absolutePath: item.absolutePath};
 	});
 
-	handle('workspace:copy-file', async (event, relativePath, destinationRelativePath) =>
+	// Editor-side actions accept visible diagram files only. The manager retains
+	// its separate directory operations; both entry points share sender validation.
+	handle('workspace:rename-file', async (event, relativePath, name, expectedRoot) =>
 	{
-		const root = store?.get(WORKSPACE_ROOT_KEY);
+		const root = getActionRoot(expectedRoot);
+		await getWorkspaceFile(root, relativePath);
+		name = validateWorkspaceName(name);
+		if (name.startsWith('.') || name.startsWith('~$')) throw new Error('文件名称不能以 . 或 ~$ 开头');
+		const renamedRelativePath = await renameWorkspaceItem(root, relativePath, name);
+		const item = await getWorkspaceFile(root, renamedRelativePath);
+		authorizePath?.(item.absolutePath);
+		return {state: await getState(), renamedRelativePath: renamedRelativePath, absolutePath: item.absolutePath};
+	});
+
+	handle('workspace:trash-file', async (event, relativePath, expectedRoot) =>
+	{
+		const root = getActionRoot(expectedRoot);
+		const item = await getWorkspaceFile(root, relativePath);
+		await shell.trashItem(item.absolutePath);
+		return {state: await getState()};
+	});
+
+	handle('workspace:copy-file', async (event, relativePath, destinationRelativePath, expectedRoot) =>
+	{
+		const root = getActionRoot(expectedRoot);
 		const copiedRelativePath = await copyWorkspaceFile(root, relativePath, destinationRelativePath);
 		return {state: await getState(), copiedRelativePath: copiedRelativePath};
 	});
