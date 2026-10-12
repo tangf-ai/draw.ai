@@ -49,6 +49,24 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 	var agentPreparedPath = null;
 	var agentDisposed = false;
 	var markdownFrame = null;
+	var quoteTimer = null;
+	var quoteIndex = -1;
+	var agentCompanionStopping = false;
+	var reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+	var agentQuotes = [
+		'每一个清晰的想法，都从第一笔开始。',
+		'把复杂拆成小步，答案就会慢慢清晰。',
+		'不必一次完美，每次改进都有意义。',
+		'今天多理清一条思路，就是向前一步。',
+		'给灵感一点时间，也给自己一点耐心。',
+		'从一个节点开始，让想法慢慢连接。',
+		'认真走过的小步，也会通向远方。',
+		'你正在把脑海中的可能，变成看得见的图景。',
+		'先让想法落地，再让细节发光。',
+		'每一次尝试，都在让下一次更从容。',
+		'思路偶尔绕路，也可能遇见新的风景。',
+		'保持好奇，下一条连线也许就是新发现。'
+	];
 
 	function createElement(tag, className, text)
 	{
@@ -107,7 +125,22 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 		'.geAgentIconBtn:hover{background:light-dark(#eef1f4,#35363a)}',
 		'.geAgentIconBtn:disabled{opacity:.35;cursor:default}',
 		'.geAgentMessages{min-height:0;flex:1;overflow-y:auto;padding:12px 12px 8px;box-sizing:border-box}',
-		'.geAgentEmpty{height:100%;display:flex;align-items:center;justify-content:center;color:light-dark(#80868b,#9aa0a6);font-size:12px}',
+		'.geAgentEmpty{min-height:240px;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;box-sizing:border-box;padding:20px 8px;text-align:center}',
+		'.geAgentEmptyTitle{margin:18px 0 6px;font-size:16px;font-weight:600;color:inherit}',
+		'.geAgentEmptyHint{max-width:260px;color:light-dark(#70757a,#bdc1c6);font-size:12px;line-height:1.7}',
+		'.geAgentCompanion{width:100%;max-width:290px;align-self:center;text-align:center;padding:12px 0;box-sizing:border-box}',
+		'.geAgentSketch{position:relative;width:144px;height:68px;margin:0 auto 16px;color:light-dark(#1a73e8,#8ab4f8)}',
+		'.geAgentSketch:before,.geAgentSketch:after{content:"";position:absolute;top:33px;width:32px;border-top:1px dashed currentColor;opacity:.5}',
+		'.geAgentSketch:before{left:32px}.geAgentSketch:after{left:80px}',
+		'.geAgentSketchNode{position:absolute;top:20px;width:28px;height:28px;border:1px solid currentColor;border-radius:8px;background:light-dark(#f4f8ff,#29384d);box-sizing:border-box;animation:geAgentNodeBreathe 3.6s ease-in-out infinite}',
+		'.geAgentSketchNode:nth-child(1){left:4px;animation-delay:-2.4s}.geAgentSketchNode:nth-child(2){left:58px;transform:rotate(45deg);border-radius:6px;animation-delay:-1.2s}.geAgentSketchNode:nth-child(3){left:112px}',
+		'.geAgentQuote{margin:0;min-height:42px;padding:0 10px;color:light-dark(#5f6368,#bdc1c6);font-size:12px;line-height:1.8;overflow-wrap:anywhere}',
+		'.geAgentQuoteText{display:block;animation:geAgentQuoteReveal .6s ease-out}',
+		'.geAgentRun .geAgentCompanion{max-width:none;margin-top:8px;padding:6px 0}.geAgentRun .geAgentSketch{height:48px;margin-bottom:8px}.geAgentRun .geAgentQuote{min-height:0;font-size:11px}',
+		'@keyframes geAgentNodeBreathe{0%,100%{opacity:.45;box-shadow:0 0 0 0 transparent}50%{opacity:1;box-shadow:0 0 0 5px light-dark(#1a73e80c,#8ab4f812)}}',
+		'@keyframes geAgentQuoteReveal{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}',
+		'.geAgentView.geAgentHidden *,.geAgentCompanion.geAgentHidden *,.geAgentMotionPaused *{animation-play-state:paused!important}',
+		'@media(prefers-reduced-motion:reduce){.geAgentView *,.geAgentView *:before,.geAgentView *:after,.geAgentLauncher:before{animation:none!important;transition:none!important}}',
 		'.geAgentMessage{margin:0 0 14px;line-height:1.55;word-break:break-word;letter-spacing:0}',
 		'.geAgentMessageText{white-space:pre-wrap}',
 		'.geAgentMarkdown{white-space:normal;line-height:1.65;overflow-wrap:anywhere}',
@@ -226,7 +259,24 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 	agentView.appendChild(agentToolbar);
 
 	var agentMessages = createElement('div', 'geAgentMessages');
-	var agentEmptyState = createElement('div', 'geAgentEmpty', '新对话');
+	var agentEmptyState = createElement('div', 'geAgentEmpty');
+	var agentCompanion = createElement('div', 'geAgentCompanion');
+	var agentSketch = createElement('div', 'geAgentSketch');
+	agentSketch.setAttribute('aria-hidden', 'true');
+	for (var sketchIndex = 0; sketchIndex < 3; sketchIndex++)
+	{
+		agentSketch.appendChild(createElement('span', 'geAgentSketchNode'));
+	}
+	var agentQuote = createElement('p', 'geAgentQuote');
+	agentQuote.setAttribute('aria-live', 'off');
+	agentCompanion.appendChild(agentSketch);
+	agentCompanion.appendChild(agentQuote);
+	var agentEmptyTitle = createElement('div', 'geAgentEmptyTitle', '从一个想法开始');
+	var agentEmptyHint = createElement('div', 'geAgentEmptyHint', '描述你想画的内容，或让我帮你整理当前图纸。');
+	agentEmptyState.appendChild(agentCompanion);
+	agentEmptyState.appendChild(agentEmptyTitle);
+	agentEmptyState.appendChild(agentEmptyHint);
+	advanceAgentQuote();
 	agentMessages.appendChild(agentEmptyState);
 	agentView.appendChild(agentMessages);
 	var agentComposer = createElement('div', 'geAgentComposer');
@@ -243,6 +293,47 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 	agentView.appendChild(agentComposer);
 	document.body.appendChild(agentView);
 	document.body.appendChild(agentLauncher);
+
+	function advanceAgentQuote()
+	{
+		// Pick a different local quote; no model request or conversation entry.
+		quoteIndex = quoteIndex < 0 ? Math.floor(Math.random() * agentQuotes.length) :
+			(quoteIndex + 1 + Math.floor(Math.random() * (agentQuotes.length - 1))) % agentQuotes.length;
+		agentQuote.replaceChildren(createElement('span', 'geAgentQuoteText', agentQuotes[quoteIndex]));
+	}
+
+	function updateAgentCompanion()
+	{
+		var target = null;
+		if (agentEmptyState.parentNode === agentMessages &&
+			(agentState == null || agentState.configured !== false)) target = agentEmptyState;
+		else if (agentBusy && !agentCompanionStopping && agentRun != null &&
+			!(agentRun.stream.__agentMarkdownSource || '') &&
+			Object.keys(agentApprovals).length === 0) target = agentRun.card;
+
+		if (target != null && agentCompanion.parentNode !== target)
+		{
+			if (target === agentEmptyState) target.insertBefore(agentCompanion, agentEmptyTitle);
+			else target.appendChild(agentCompanion);
+			advanceAgentQuote();
+		}
+		agentCompanion.classList.toggle('geAgentHidden', target == null);
+		agentView.classList.toggle('geAgentMotionPaused', document.hidden);
+		var rotate = target != null && assistantOpen && !document.hidden &&
+			!reducedMotion.matches && !agentDisposed;
+		if (!rotate && quoteTimer != null)
+		{
+			window.clearInterval(quoteTimer);
+			quoteTimer = null;
+		}
+		else if (rotate && quoteTimer == null)
+		{
+			quoteTimer = window.setInterval(advanceAgentQuote, 12000);
+		}
+	}
+
+	document.addEventListener('visibilitychange', updateAgentCompanion);
+	reducedMotion.addEventListener('change', updateAgentCompanion);
 
 	function renderAgentMarkdown(element, text)
 	{
@@ -319,6 +410,7 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 		agentView.classList.toggle('geAgentHidden', !assistantOpen);
 		agentLauncher.setAttribute('aria-expanded', String(assistantOpen));
 		agentLauncher.title = assistantOpen ? '收起 AI 助手' : '打开 AI 助手';
+		updateAgentCompanion();
 		if (assistantOpen)
 		{
 			updateContextLabel();
@@ -727,6 +819,7 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 			agentState == null || agentState.canRollback !== true;
 		agentStopButton.disabled = !agentBusy;
 		updatePageScopeOptions();
+		updateAgentCompanion();
 	}
 
 	function showAgentProfileDialog()
@@ -943,6 +1036,7 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 
 	function scrollAgentMessages()
 	{
+		updateAgentCompanion();
 		agentMessages.scrollTop = agentMessages.scrollHeight;
 	}
 
@@ -1013,14 +1107,18 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 
 		if (items.length === 0)
 		{
-			agentEmptyState.textContent = agentState != null && agentState.configured === false ?
-				'未设置工作区' : '新对话';
+			var unconfigured = agentState != null && agentState.configured === false;
+			agentEmptyTitle.textContent = unconfigured ? '未设置工作区' : '从一个想法开始';
+			agentEmptyHint.textContent = unconfigured ? '先打开工作区和图文件，再开始与助手协作。' :
+				'描述你想画的内容，或让我帮你整理当前图纸。';
 			agentMessages.appendChild(agentEmptyState);
 		}
+		updateAgentCompanion();
 	}
 
 	function beginAgentRun(label)
 	{
+		agentCompanionStopping = false;
 		if (agentEmptyState.parentNode != null) agentEmptyState.parentNode.removeChild(agentEmptyState);
 		var card = createElement('div', 'geAgentRun');
 		var header = createElement('div', 'geAgentRunHeader');
@@ -1459,10 +1557,13 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 	function stopAgent()
 	{
 		if (!agentBusy) return;
+		agentCompanionStopping = true;
 		agentStopButton.disabled = true;
 		ensureAgentRun().status.textContent = '正在停止 Pi';
+		scrollAgentMessages();
 		request('workspaceAgentInterrupt').catch(function(error)
 		{
+			agentCompanionStopping = false;
 			addAgentMessage({role: 'assistant', text: error.message}, true);
 			updateAgentControls();
 		});
@@ -1547,6 +1648,9 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 	ui.destroyFunctions.push(function()
 	{
 		agentDisposed = true;
+		if (quoteTimer != null) window.clearInterval(quoteTimer);
+		document.removeEventListener('visibilitychange', updateAgentCompanion);
+		reducedMotion.removeEventListener('change', updateAgentCompanion);
 		if (markdownFrame != null) window.cancelAnimationFrame(markdownFrame);
 		if (agentBusy && agentGraphWasEnabled) graph.setEnabled(true);
 		if (agentView.parentNode != null) agentView.parentNode.removeChild(agentView);
