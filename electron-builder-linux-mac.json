@@ -4,6 +4,7 @@
   "asar": true,
   "files": [
     "**/*",
+    "!dist{,/**}",
     "!**/WEB-INF{,/**}",
     "!.github{,/**}",
     "!.gitmodules",
