@@ -22,7 +22,7 @@ self.skipWaiting();
 var MANIFEST = [
   {"url":"js/bootstrap.js","revision":"4ead21aa3d21115074a854b492b2e7fd"},
   {"url":"js/main.js","revision":"a8d40469d3d72ab4b11059362f3dd825"},
-  {"url":"js/app.min.js","revision":"982a8dda7683c113dc45bf1471a19e6a"},
+  {"url":"js/app.min.js","revision":"f839e39c9e8f90ff0006ae477857c61e"},
   {"url":"js/extensions.min.js","revision":"2fcc3febe81a6d9e14d1d8c84326afc6"},
   {"url":"js/plantuml/drawio-plantuml.min.js","revision":"4dd9655cbd33abcdc0f668225476b942"},
   {"url":"js/orgchart.min.js","revision":"619d8c4dab47b81868916df31f55478b"},

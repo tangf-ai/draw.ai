@@ -1439,6 +1439,116 @@
 		return vertex;
 	}
 
+	function editorUiGetSiblingSource(graph)
+	{
+		var source = graph.cellEditor.getEditingCell();
+		var geometry = source != null ? graph.model.getGeometry(source) : null;
+		var parent = source != null ? graph.model.getParent(source) : null;
+
+		return graph.isEnabled() && source != null && graph.model.isVertex(source) &&
+			!graph.isCellLocked(source) && parent != null && !graph.isCellLocked(parent) &&
+			geometry != null && !geometry.relative &&
+			!(graph.isTable && graph.isTable(source)) &&
+			!(graph.isTableRow && graph.isTableRow(source)) &&
+			!(graph.isTableCell && graph.isTableCell(source)) ? source : null;
+	}
+
+	function editorUiCreateSiblingVertex(graph, source)
+	{
+		var parent = graph.model.getParent(source);
+		var incoming = graph.getIncomingEdges(source);
+		var incomingEdge = incoming.length == 1 ? incoming[0] : null;
+		var branchParent = incomingEdge != null ? graph.model.getTerminal(incomingEdge, true) : null;
+
+		if (branchParent == source || branchParent == null || !graph.model.isVertex(branchParent) ||
+			graph.model.getParent(branchParent) != parent)
+		{
+			branchParent = null;
+		}
+
+		var vertex = null;
+		graph.model.beginUpdate();
+		try
+		{
+			// Commit the current label before measuring it: autosize may change its bounds.
+			graph.stopEditing(false);
+			var geometry = graph.model.getGeometry(source);
+			var width = Math.max(1, Number(geometry.width) || 1);
+			var height = Math.max(1, Number(geometry.height) || 1);
+			var x = Math.round(geometry.x);
+			var y = Math.round(geometry.y + geometry.height + editorUiTabCreateGap);
+			var vertices = graph.getChildVertices(parent);
+			var occupied;
+
+			do
+			{
+				occupied = false;
+				var candidate = new mxRectangle(x, y, width, height);
+
+				for (var i = 0; i < vertices.length; i++)
+				{
+					var other = graph.model.getGeometry(vertices[i]);
+
+					if (other != null && !other.relative && mxUtils.intersects(candidate, other))
+					{
+						y = Math.ceil(other.y + other.height + editorUiTabCreateGap);
+						occupied = true;
+						break;
+					}
+				}
+			}
+			while (occupied);
+
+			vertex = graph.insertVertex(parent, null, '', x, y, width, height, source.style);
+
+			if (branchParent != null)
+			{
+				graph.insertEdge(parent, null, '', branchParent, vertex, incomingEdge.style);
+			}
+		}
+		finally
+		{
+			graph.model.endUpdate();
+		}
+
+		graph.setSelectionCell(vertex);
+		graph.scrollCellToVisible(vertex);
+		graph.startEditingAtCell(vertex);
+		return vertex;
+	}
+
+	// Capture label-editor keys before its existing Enter-to-finish listener.
+	var editorUiInstallCellEditorListeners = mxCellEditor.prototype.installListeners;
+	mxCellEditor.prototype.installListeners = function(elt)
+	{
+		var cellEditor = this;
+		var composing = false;
+		elt.addEventListener('compositionstart', function() { composing = true; });
+		elt.addEventListener('compositionend', function() { composing = false; });
+		elt.addEventListener('blur', function() { composing = false; });
+		elt.addEventListener('keydown', function(evt)
+		{
+			if (evt.keyCode != 13 || evt.isComposing || composing ||
+				evt.ctrlKey || evt.metaKey || evt.altKey || mxEvent.isConsumed(evt)) return;
+
+			var source = editorUiGetSiblingSource(cellEditor.graph);
+			if (source == null) return;
+
+			if (evt.shiftKey)
+			{
+				// Keep the browser's soft line break, including on Safari.
+				mxEvent.consume(evt, false);
+			}
+			else
+			{
+				mxEvent.consume(evt);
+				editorUiCreateSiblingVertex(cellEditor.graph, source);
+			}
+		}, true);
+
+		return editorUiInstallCellEditorListeners.apply(this, arguments);
+	};
+
 	// The graph container handles Tab before mxKeyHandler sees the event. Intercept
 	// it here so a selected vertex can create a branch instead of being moved
 	// through the normal selection order.

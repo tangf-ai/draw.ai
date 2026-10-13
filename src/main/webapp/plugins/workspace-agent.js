@@ -41,6 +41,8 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 	var customPageIds = [];
 	var agentState = null;
 	var agentBusy = false;
+	var agentStopping = false;
+	var agentInterruptReady = false;
 	var agentLoading = false;
 	var agentRun = null;
 	var agentActivities = {};
@@ -208,6 +210,7 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 		'.geAgentInput:focus{border-color:#1a73e8;box-shadow:0 0 0 1px #1a73e8}',
 		'.geAgentSend{width:34px;height:34px;flex:none;border:0;border-radius:4px;background:#188038;color:#fff;font-size:18px;cursor:pointer;padding:0}',
 		'.geAgentSend:hover{background:#137333}',
+		'.geAgentSend.geAgentSendStop{background:#b3261e}.geAgentSend.geAgentSendStop:hover{background:#8c1d18}',
 		'.geAgentSend:disabled{opacity:.45;cursor:default}',
 		'.geAgentComposerStatus{min-height:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:light-dark(#70757a,#9aa0a6);font-size:10px}',
 		'.geAgentWorkspaceBusy{pointer-events:none!important;filter:saturate(.55);cursor:progress!important}',
@@ -796,7 +799,8 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 	{
 		if (agentLoading) return '正在读取 Agent 状态…';
 		if (agentState == null || agentState.configured !== true) return '请先设置图纸工作区';
-		if (agentBusy) return 'Pi 正在执行 · 可继续补充要求';
+		if (agentStopping) return '正在停止任务…';
+		if (agentBusy) return '任务执行中 · Enter 补充要求';
 		var runtime = agentState.model || agentState.command || 'pi';
 		return (agentState.sessionId ? '当前对话 · ' : '新对话 · ') + runtime;
 	}
@@ -805,19 +809,21 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 	{
 		agentLauncher.classList.toggle('geAgentWorking', agentBusy);
 		agentComposerStatus.textContent = agentStatusText();
-		agentSendButton.disabled = agentLoading ||
+		agentSendButton.disabled = agentLoading || agentStopping ||
 			(agentState != null && agentState.configured === false);
 		agentInput.disabled = agentLoading ||
 			(agentState != null && agentState.configured === false);
-		agentSendButton.textContent = agentBusy ? '↗' : '↑';
-		agentSendButton.title = agentBusy ? '补充要求' : '发送';
-		agentInput.setAttribute('placeholder', agentBusy ? '补充当前任务的要求' :
+		agentSendButton.textContent = agentBusy ? '■' : '↑';
+		agentSendButton.title = agentStopping ? '正在停止任务…' : (agentBusy ? '停止任务' : '发送');
+		agentSendButton.setAttribute('aria-label', agentSendButton.title);
+		agentSendButton.classList.toggle('geAgentSendStop', agentBusy);
+		agentInput.setAttribute('placeholder', agentBusy ? '补充要求后按 Enter 发送' :
 			(agentState != null && agentState.sessionId ? '继续当前对话' : '向 Agent 提交修改要求'));
 		agentNewThreadButton.disabled = agentBusy || agentLoading;
 		agentProfileButton.disabled = agentBusy || agentLoading;
 		agentRollbackButton.disabled = agentBusy || agentLoading ||
 			agentState == null || agentState.canRollback !== true;
-		agentStopButton.disabled = !agentBusy;
+		agentStopButton.disabled = !agentBusy || agentStopping;
 		updatePageScopeOptions();
 		updateAgentCompanion();
 	}
@@ -998,6 +1004,11 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 	function setAgentBusy(busy)
 	{
 		busy = busy === true;
+		if (!busy)
+		{
+			agentStopping = false;
+			agentInterruptReady = false;
+		}
 
 		if (busy !== agentBusy)
 		{
@@ -1259,7 +1270,12 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 
 		if (event.type === 'status')
 		{
-			run.status.textContent = event.label || 'Pi 正在执行';
+			run.status.textContent = agentStopping ? '正在停止任务…' : (event.label || 'Pi 正在执行');
+			if (event.phase === 'connecting')
+			{
+				agentInterruptReady = true;
+				if (agentStopping) requestAgentStop();
+			}
 		}
 		else if (event.type === 'message-delta')
 		{
@@ -1386,6 +1402,7 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 		{
 			if (agentDisposed) return next;
 			agentState = next;
+			agentInterruptReady = next.busy === true;
 			renderAgentHistory(next.messages);
 			setAgentBusy(next.busy === true);
 
@@ -1414,7 +1431,6 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 	{
 		agentInput.value = '';
 		addAgentMessage({role: 'user', text: text, steered: true});
-		agentSendButton.disabled = true;
 
 		try
 		{
@@ -1437,7 +1453,7 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 	async function sendAgentPrompt()
 	{
 		var prompt = agentInput.value.trim();
-		if (prompt === '' || agentLoading) return;
+		if (prompt === '' || agentLoading || agentStopping) return;
 
 		if (agentBusy)
 		{
@@ -1467,6 +1483,15 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 		try
 		{
 			prepared = await saveCurrentFileForAgent(true);
+			if (agentStopping)
+			{
+				await restoreCurrentFileAfterAgent(prepared.path, false);
+				prepared = null;
+				setAgentBusy(false);
+				await loadAgentState(true);
+				if (!agentDisposed) addAgentMessage({role: 'assistant', text: '任务已停止'});
+				return;
+			}
 			await request('workspaceAgentChat', {input: {
 				prompt: prompt,
 				filePath: prepared.path,
@@ -1554,19 +1579,33 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 		}
 	}
 
-	function stopAgent()
+	function requestAgentStop()
 	{
-		if (!agentBusy) return;
-		agentCompanionStopping = true;
-		agentStopButton.disabled = true;
-		ensureAgentRun().status.textContent = '正在停止 Pi';
-		scrollAgentMessages();
 		request('workspaceAgentInterrupt').catch(function(error)
 		{
+			agentStopping = false;
 			agentCompanionStopping = false;
 			addAgentMessage({role: 'assistant', text: error.message}, true);
 			updateAgentControls();
 		});
+	}
+
+	function stopAgent()
+	{
+		if (!agentBusy || agentStopping) return;
+		agentCompanionStopping = true;
+		agentStopping = true;
+		ensureAgentRun().status.textContent = '正在停止任务…';
+		scrollAgentMessages();
+		updateAgentControls();
+		// The backend can abort only after its checkpoint and Pi connection are ready.
+		if (agentInterruptReady) requestAgentStop();
+	}
+
+	function handleAgentSendClick()
+	{
+		if (agentBusy) stopAgent();
+		else sendAgentPrompt();
 	}
 
 	function handlePageScopeChange()
@@ -1605,7 +1644,7 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 		agentLauncher.addEventListener(type, function(event) { event.stopPropagation(); });
 	});
 	agentPageScopeSelect.addEventListener('change', handlePageScopeChange);
-	agentSendButton.addEventListener('click', sendAgentPrompt);
+	agentSendButton.addEventListener('click', handleAgentSendClick);
 	agentNewThreadButton.addEventListener('click', newAgentThread);
 	agentProfileButton.addEventListener('click', showAgentProfileDialog);
 	agentStopButton.addEventListener('click', stopAgent);
