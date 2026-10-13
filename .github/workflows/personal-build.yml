@@ -57,6 +57,17 @@ jobs:
             # dmg/zip on macOS, AppImage/deb/rpm on Linux
             npx electron-builder --config electron-builder-linux-mac.json --publish never
           fi
+      - name: Verify macOS bundles and disk images
+        if: ${{ inputs.platform == 'macos' }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' bundle; do
+            codesign --verify --deep --strict "$bundle"
+            /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$bundle/Contents/Info.plist" | grep -qx ai.draw.desktop
+            /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$bundle/Contents/Info.plist" | grep -qx "$(node -p 'require("./package.json").version')"
+            test "$(stat -f%z "$bundle/Contents/Resources/app.asar")" -lt 524288000
+          done < <(find dist -type d -name 'draw.ai.app' -print0)
+          for image in dist/*.dmg; do hdiutil verify "$image"; done
       - name: Upload artifacts
         uses: actions/upload-artifact@v6
         with:

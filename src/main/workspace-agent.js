@@ -1,6 +1,6 @@
 import {spawn as nodeSpawn} from 'node:child_process';
 import crypto from 'node:crypto';
-import {readdirSync, promises as fs} from 'node:fs';
+import {createReadStream, readdirSync, constants as fsConstants, promises as fs} from 'node:fs';
 import path from 'node:path';
 import {StringDecoder} from 'node:string_decoder';
 import {DOMParser} from '@xmldom/xmldom';
@@ -179,9 +179,16 @@ function workspaceKey(root)
 	return crypto.createHash('sha256').update(root).digest('hex').slice(0, 24);
 }
 
-function fileHash(data)
+function fileHash(filePath)
 {
-	return crypto.createHash('sha256').update(data).digest('hex');
+	return new Promise((resolve, reject) =>
+	{
+		const hash = crypto.createHash('sha256');
+		const stream = createReadStream(filePath);
+		stream.on('error', reject);
+		stream.on('data', chunk => hash.update(chunk));
+		stream.on('end', () => resolve(hash.digest('hex')));
+	});
 }
 
 function readSessions(store)
@@ -272,7 +279,10 @@ async function resolveDiagramPath(root, filePath)
 	return resolved;
 }
 
-async function scanDrawioFiles(root, onFile)
+// `knownHashes` maps a relative path to a previously recorded manifest entry.
+// When size and mtime still match, the stored digest is reused so an unchanged
+// diagram does not have to be read again on every Agent turn.
+async function scanDrawioFiles(root, {onFile, knownHashes} = {})
 {
 	let count = 0;
 	let totalBytes = 0;
@@ -312,8 +322,8 @@ async function scanDrawioFiles(root, onFile)
 					'WORKSPACE_AGENT_CHECKPOINT_LIMIT');
 			}
 
-			const data = await fs.readFile(absolutePath);
-			totalBytes += data.length;
+			const relativePath = normalizeRelativePath(path.relative(root, absolutePath));
+			totalBytes += stat.size;
 
 			if (totalBytes > MAX_CHECKPOINT_BYTES)
 			{
@@ -321,10 +331,12 @@ async function scanDrawioFiles(root, onFile)
 					'WORKSPACE_AGENT_CHECKPOINT_LIMIT');
 			}
 
-			const relativePath = normalizeRelativePath(path.relative(root, absolutePath));
-			const item = {path: relativePath, size: data.length, hash: fileHash(data)};
+			const known = knownHashes?.get(relativePath);
+			const hash = known != null && known.size === stat.size && known.mtimeMs === stat.mtimeMs ?
+				known.hash : await fileHash(absolutePath);
+			const item = {path: relativePath, size: stat.size, mtimeMs: stat.mtimeMs, hash};
 			manifest.push(item);
-			if (onFile) await onFile(item, data);
+			if (onFile) await onFile(item, absolutePath);
 		}
 	}
 
@@ -337,7 +349,7 @@ async function writeJson(filePath, value)
 	await fs.writeFile(filePath, JSON.stringify(value, null, 2), {encoding: 'utf8', flag: 'wx'});
 }
 
-async function createCheckpoint(root, stateDir)
+async function createCheckpoint(root, stateDir, knownHashes)
 {
 	const checkpointRoot = path.join(stateDir, 'checkpoints', workspaceKey(root));
 	const id = `${Date.now()}-${crypto.randomUUID()}`;
@@ -347,12 +359,14 @@ async function createCheckpoint(root, stateDir)
 
 	try
 	{
-		const before = await scanDrawioFiles(root, async (item, data) =>
+		const before = await scanDrawioFiles(root, {knownHashes, onFile: async (item, sourcePath) =>
 		{
 			const snapshotPath = path.join(filesDirectory, ...item.path.split('/'));
 			await fs.mkdir(path.dirname(snapshotPath), {recursive: true});
-			await fs.writeFile(snapshotPath, data, {flag: 'wx'});
-		});
+			// COPYFILE_FICLONE asks APFS for a copy-on-write clone and falls back
+			// to a regular copy where reflinks are unavailable.
+			await fs.copyFile(sourcePath, snapshotPath, fsConstants.COPYFILE_FICLONE);
+		}});
 		const checkpoint = {id, root, directory, createdAt: Date.now(), before};
 		await writeJson(path.join(directory, 'checkpoint.json'), checkpoint);
 		return checkpoint;
@@ -1067,11 +1081,26 @@ export function createWorkspaceAgentService({
 
 	async function rollbackFailedTurn(checkpoint)
 	{
-		const current = await scanDrawioFiles(checkpoint.root);
+		const current = await scanDrawioFiles(checkpoint.root, {knownHashes: manifestMap(checkpoint.before)});
 		const changes = diffManifests(checkpoint.before, current);
 		if (changes.length > 0) await restoreCheckpoint(checkpoint, changes);
 		await fs.rm(checkpoint.directory, {recursive: true, force: true}).catch(() => {});
 		return changes;
+	}
+
+	async function readKnownHashes(session)
+	{
+		if (session.lastCheckpoint == null) return null;
+
+		try
+		{
+			const previous = await readCheckpointResult(session.lastCheckpoint);
+			return manifestMap(previous.after);
+		}
+		catch (error)
+		{
+			return null;
+		}
 	}
 
 	return {
@@ -1186,7 +1215,7 @@ export function createWorkspaceAgentService({
 			let checkpoint;
 
 			onProgress?.({type: 'status', phase: 'checkpoint', label: '正在建立安全检查点'});
-			checkpoint = await createCheckpoint(root, stateDir);
+			checkpoint = await createCheckpoint(root, stateDir, await readKnownHashes(session));
 			appendMessage(store, session, {role: 'user', text: prompt, filePath: relativeFilePath});
 
 			try
@@ -1246,7 +1275,7 @@ export function createWorkspaceAgentService({
 				}
 
 				onProgress?.({type: 'status', phase: 'validating', label: '正在校验图文件'});
-				const after = await scanDrawioFiles(root);
+				const after = await scanDrawioFiles(root, {knownHashes: manifestMap(checkpoint.before)});
 				const changes = diffManifests(checkpoint.before, after);
 
 				if (changes.some(change => change.kind === 'deleted'))

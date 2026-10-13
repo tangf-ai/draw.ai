@@ -43,14 +43,21 @@ async function loadTabHandler(bundle)
 		'\n    var editorUiCreateKeyHandler', start);
 	function EditorUi() {}
 	EditorUi.prototype.onKeyDown = function() { this.fallbackCalls++; };
+	function CellEditor() {}
+	CellEditor.prototype.installListeners = function() {};
+	EditorUi.CellEditor = CellEditor;
 	runInNewContext(text.slice(start, end), {
 		EditorUi,
+		mxCellEditor: CellEditor,
 		mxRectangle: class
 		{
 			constructor(x, y, width, height) { Object.assign(this, {x, y, width, height}); }
 		},
 		mxUtils: {intersects},
-		mxEvent: {consume: (evt) => { evt.consumed = true; }}
+		mxEvent: {
+			consume: (evt, preventDefault = true) => { evt.consumed = true; evt.prevented = preventDefault; },
+			isConsumed: (evt) => !!evt.consumed
+		}
 	});
 	return EditorUi;
 }
@@ -64,23 +71,34 @@ function fixture(EditorUi, {canvasWidth = 2000, scale = 1, translateX = 0,
 	const edges = [];
 	let selection = [source];
 	let updates = 0;
+	let editingCell = null;
+	let editingValue = '';
 	const graph = {
 		container: {clientWidth: canvasWidth, scrollLeft},
 		view: {scale, translate: {x: translateX}, getState: () => ({origin: {x: parentX}})},
 		model: {
 			getGeometry: (cell) => cell.geometry,
 			getParent: (cell) => cell.parent,
+			getTerminal: (edge, sourceTerminal) => sourceTerminal ? edge.from : edge.to,
 			isVertex: (cell) => cell.vertex,
 			beginUpdate: () => { updates++; },
 			endUpdate: () => { updates--; }
 		},
 		getSelectionCells: () => selection,
 		getChildVertices: (p) => vertices.filter((v) => v.parent === p),
-		isEditing: () => false,
+		isEditing: () => editingCell != null,
 		isEnabled: () => true,
 		isCellLocked: (cell) => !!cell.locked,
 		setSelectionCell: (cell) => { selection = [cell]; },
 		createCurrentEdgeStyle: () => 'edgeStyle=orthogonalEdgeStyle;',
+		getIncomingEdges: (cell) => edges.filter(edge => edge.to === cell),
+		stopEditing: () =>
+		{
+			if (editingCell != null) editingCell.value = editingValue;
+			editingCell = null;
+		},
+		startEditingAtCell: (cell) => { editingCell = cell; editingValue = cell.value || ''; },
+		scrollCellToVisible: () => {},
 		insertVertex: (p, id, value, vx, vy, w, h, style) =>
 		{
 			const vertex = {vertex: true, parent: p, value, style,
@@ -90,11 +108,25 @@ function fixture(EditorUi, {canvasWidth = 2000, scale = 1, translateX = 0,
 		},
 		insertEdge: (p, id, value, from, to, style) => { edges.push({from, to, style}); }
 	};
+	graph.cellEditor = new EditorUi.CellEditor();
+	graph.cellEditor.graph = graph;
+	graph.cellEditor.getEditingCell = () => editingCell;
+	const listeners = {};
+	graph.cellEditor.installListeners({addEventListener: (name, handler) => { listeners[name] = handler; }});
 	const ui = new EditorUi();
 	ui.editor = {graph};
 	ui.fallbackCalls = 0;
 	return {graph, ui, source, parent, vertices, edges,
 		get updates() { return updates; },
+		edit: (cell, value) => { graph.startEditingAtCell(cell); editingValue = value; },
+		type: (value) => { editingValue = value; },
+		compose: (active) => listeners[active ? 'compositionstart' : 'compositionend'](),
+		enter: (modifiers = {}) =>
+		{
+			const evt = {keyCode: 13, ...modifiers};
+			listeners.keydown(evt);
+			return evt;
+		},
 		tab: (modifiers = {}) =>
 		{
 			const evt = {keyCode: 9, ...modifiers};
@@ -106,6 +138,86 @@ function fixture(EditorUi, {canvasWidth = 2000, scale = 1, translateX = 0,
 for (const bundle of [false, true])
 {
 	const variant = bundle ? 'production bundle' : 'editor source';
+
+	test(`${variant}: Enter commits a label and edits a sibling linked to the same parent`, async () =>
+	{
+		const f = fixture(await loadTabHandler(bundle));
+		f.tab();
+		const child = f.vertices[1];
+		f.edit(child, '大模型');
+		assert.equal(f.enter().prevented, true);
+		assert.equal(child.value, '大模型');
+		const sibling = f.vertices[2];
+		assert.deepEqual(sibling.geometry, {x: 260, y: 200, width: 120, height: 60});
+		assert.equal(sibling.style, child.style);
+		assert.equal(f.edges[1].from, f.source);
+		assert.equal(f.edges[1].to, sibling);
+		assert.equal(f.edges[1].style, f.edges[0].style);
+		assert.equal(f.graph.getSelectionCells()[0], sibling);
+		assert.equal(f.graph.cellEditor.getEditingCell(), sibling);
+		f.type('智能体');
+		f.enter();
+		assert.equal(sibling.value, '智能体');
+		assert.equal(f.edges[2].from, f.source);
+		assert.deepEqual(f.vertices[3].geometry, {x: 260, y: 300, width: 120, height: 60});
+		assert.equal(f.updates, 0);
+	});
+
+	test(`${variant}: a root sibling stays at the same level and skips occupied slots`, async () =>
+	{
+		const f = fixture(await loadTabHandler(bundle));
+		f.graph.insertVertex(f.parent, null, '', 100, 200, 120, 160, '');
+		f.edit(f.source, '个人IP');
+		f.enter();
+		assert.equal(f.source.value, '个人IP');
+		assert.equal(f.edges.length, 0);
+		assert.deepEqual(f.vertices.at(-1).geometry, {x: 100, y: 400, width: 120, height: 60});
+		assert.equal(f.updates, 0);
+	});
+
+	test(`${variant}: Shift+Enter allows a line break and IME Enter never creates a sibling`, async () =>
+	{
+		const f = fixture(await loadTabHandler(bundle));
+		f.edit(f.source, '正在输入');
+		assert.equal(f.enter({shiftKey: true}).prevented, false);
+		assert.equal(f.graph.cellEditor.getEditingCell(), f.source);
+		assert.equal(f.enter({isComposing: true}).consumed, undefined);
+		assert.equal(f.enter({keyCode: 229}).consumed, undefined);
+		f.compose(true);
+		assert.equal(f.enter().consumed, undefined);
+		f.compose(false);
+		assert.equal(f.vertices.length, 1);
+		f.enter();
+		assert.equal(f.vertices.length, 2);
+	});
+
+	test(`${variant}: other modifiers, edge labels, tables and locked shapes keep their editing behavior`, async () =>
+	{
+		for (const modifier of ['ctrlKey', 'metaKey', 'altKey'])
+		{
+			const f = fixture(await loadTabHandler(bundle));
+			f.edit(f.source, 'label');
+			assert.equal(f.enter({[modifier]: true}).consumed, undefined);
+			assert.equal(f.vertices.length, 1);
+		}
+		for (const block of [
+			f => { f.graph.isEnabled = () => false; },
+			f => { f.source.locked = true; },
+			f => { f.parent.locked = true; },
+			f => { f.source.geometry.relative = true; },
+			f => { f.source.vertex = false; },
+			f => { f.graph.isTable = () => true; },
+			f => { f.graph.isTableRow = () => true; },
+			f => { f.graph.isTableCell = () => true; }
+		])
+		{
+			const f = fixture(await loadTabHandler(bundle));
+			f.edit(f.source, 'label');
+			block(f);
+			assert.equal(f.enter().consumed, undefined);
+			assert.equal(f.vertices.length, 1);
+		}
+	});
 
 	test(`${variant}: repeated Tab adds branches above and below the same parent`, async () =>
 	{

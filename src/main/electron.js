@@ -1039,6 +1039,25 @@ app.whenReady().then(() =>
 					{
 						var curFile = files[fileIndex];
 						
+						function next()
+						{
+							fileIndex++;
+
+							if (fileIndex < files.length)
+							{
+								processOneFile();
+							}
+							else if (exportFailed)
+							{
+								app.exit(1);
+							}
+							else
+							{
+								cmdQPressed = true;
+								dummyWin.destroy();
+							}
+						};
+
 						try
 						{
 							var ext = path.extname(curFile).toLowerCase();
@@ -1158,25 +1177,6 @@ app.whenReady().then(() =>
 
 								startExport();
 							}
-							
-							function next()
-							{
-								fileIndex++;
-								
-								if (fileIndex < files.length)
-								{
-									processOneFile();
-								}
-								else if (exportFailed)
-								{
-									app.exit(1);
-								}
-								else
-								{
-									cmdQPressed = true;
-									dummyWin.destroy();
-								}
-							};
 							
 							function startExport()
 							{

@@ -1,7 +1,7 @@
 {
   "name": "draw.ai",
   "productName": "draw.ai",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Open-source AI diagram workspace based on draw.io",
   "exports": "./src/main/electron.js",
   "type": "module",
@@ -12,6 +12,7 @@
   "scripts": {
     "start": "electron .",
     "sync": "node ./sync.cjs",
+    "lint": "eslint .",
     "test": "node --test src/test/branding.test.js src/test/cli-args.test.js src/test/editor-default-view.test.js src/test/editor-tab-create.test.js src/test/msi-project-created.test.js src/test/user-data-migration.test.js src/test/window-bounds.test.js src/test/workspace-agent.test.js src/test/workspace-explorer.test.js src/test/workspace-files.test.js",
     "test:agent-renderer": "electron src/test/workspace-agent-renderer.electron.js",
     "generate-icons": "node build/generate-icons.mjs",
@@ -55,9 +56,12 @@
   "devDependencies": {
     "@electron/fuses": "^2.1.3",
     "@electron/notarize": "^3.1.1",
+    "@eslint/js": "^10.0.1",
     "dotenv": "^17.4.2",
     "electron": "^42.8.0",
     "electron-builder": "^26.15.7",
+    "eslint": "^10.10.0",
+    "globals": "^17.12.0",
     "quicklookjs": "^1.0.1",
     "sumchecker": "^3.0.1"
   }

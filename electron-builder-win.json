@@ -12,7 +12,9 @@
     "!src/test{,/**}",
     "!README*.md",
     "!electron-builder-*.json",
-    "!sync.cjs"
+    "!sync.cjs",
+    "!drawio/src/main/webapp/js/integrate.min.js",
+    "!drawio/src/main/webapp/js/viewer.min.js"
   ],
   "directories": {
     "output": "./dist/"

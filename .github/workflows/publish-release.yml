@@ -81,6 +81,24 @@ jobs:
           done
 
           printf '%s\n' "${assets[@]}"
+      - name: Generate SHA-256 checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          from pathlib import Path
+
+          assets = sorted(path for path in Path('release-assets').rglob('*') if path.is_file())
+          names = [path.name for path in assets]
+          if len(names) != len(set(names)):
+              raise SystemExit('Duplicate release asset names')
+          with Path('release-assets/Files-SHA256-Hashes.txt').open('w') as output:
+              for path in assets:
+                  with path.open('rb') as source:
+                      digest = hashlib.file_digest(source, 'sha256').hexdigest()
+                  output.write(f'{digest}  {path.name}\n')
+          PY
       - name: Upload assets to draft release
         shell: bash
         run: |

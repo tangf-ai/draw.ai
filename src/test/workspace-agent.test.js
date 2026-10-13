@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import {EventEmitter} from 'node:events';
-import {mkdir, mkdtemp, readFile, realpath, rm, writeFile} from 'node:fs/promises';
+import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {PassThrough} from 'node:stream';
+import {runInNewContext} from 'node:vm';
 import test from 'node:test';
 import {
 	buildLocalEngineEnvironment,
@@ -421,6 +422,86 @@ test('creates a checkpoint and rolls back a valid Agent diagram edit', async () 
 	}
 });
 
+function diagramWith(value)
+{
+	return '<mxfile host="draw.ai"><diagram id="page-1" name="Page-1"><mxGraphModel><root>'
+		+ `<mxCell id="0"/><mxCell id="1" value="${value}" vertex="1" parent="0"/>`
+		+ '</root></mxGraphModel></diagram></mxfile>';
+}
+
+test('records size, mtime, and digest for every checkpointed diagram', async () =>
+{
+	const files = await fixture();
+	const server = fakePiRpc({onPrompt: async ({send}) =>
+	{
+		await writeFile(files.diagram, UPDATED_DIAGRAM, 'utf8');
+		send({type: 'message_end', message: {role: 'assistant',
+			content: [{type: 'text', text: '完成'}], stopReason: 'stop'}});
+		send({type: 'agent_settled'});
+	}});
+	const store = new MemoryStore();
+	const service = serviceFor(files, server, store);
+
+	try
+	{
+		await service.chat({prompt: '更新节点', filePath: files.diagram, context: PAGE_CONTEXT});
+		const session = Object.values(store.get('workspaceAgent.piSessions'))[0];
+		const result = JSON.parse(await readFile(
+			path.join(session.lastCheckpoint.directory, 'result.json'), 'utf8'));
+
+		assert.equal(result.before.length, 1);
+		assert.equal(result.after.length, 1);
+
+		for (const item of [...result.before, ...result.after])
+		{
+			assert.equal(typeof item.size, 'number');
+			assert.equal(typeof item.mtimeMs, 'number');
+			assert.match(item.hash, /^[0-9a-f]{64}$/);
+		}
+	}
+	finally
+	{
+		service.stop();
+		await rm(files.temporary, {recursive: true, force: true});
+	}
+});
+
+test('reused digests still notice an external diagram change between turns', async () =>
+{
+	const files = await fixture();
+	const external = diagramWith('EXTERNAL');
+	let turn = 0;
+	const server = fakePiRpc({onPrompt: async ({send}) =>
+	{
+		turn++;
+		await writeFile(files.diagram, turn === 1 ? diagramWith('V1') : diagramWith('V2'), 'utf8');
+		send({type: 'message_end', message: {role: 'assistant',
+			content: [{type: 'text', text: `完成 ${turn}`}], stopReason: 'stop'}});
+		send({type: 'agent_settled'});
+	}});
+	const store = new MemoryStore();
+	const service = serviceFor(files, server, store);
+
+	try
+	{
+		// Turn 1 stores a checkpoint whose "after" manifest is reused next turn.
+		await service.chat({prompt: '第一轮', filePath: files.diagram, context: PAGE_CONTEXT});
+
+		// Something outside the Agent rewrites the diagram before the next turn.
+		await writeFile(files.diagram, external, 'utf8');
+		await service.chat({prompt: '第二轮', filePath: files.diagram, context: PAGE_CONTEXT});
+
+		await service.rollback();
+		assert.equal(await readFile(files.diagram, 'utf8'), external,
+			'the pre-turn state must include the external change, not the reused digest');
+	}
+	finally
+	{
+		service.stop();
+		await rm(files.temporary, {recursive: true, force: true});
+	}
+});
+
 test('streams assistant text and reasoning without splitting on Unicode line separators', async () =>
 {
 	const files = await fixture();
@@ -731,6 +812,44 @@ test('reports a clear error when the Pi CLI is not installed', async () =>
 		service.stop();
 		await rm(files.temporary, {recursive: true, force: true});
 	}
+});
+
+test('composer button stops a running task, preserves the draft, and defers abort until ready', async () =>
+{
+	const source = await readFile(new URL(
+		'../../drawio/src/main/webapp/plugins/workspace-agent.js', import.meta.url), 'utf8');
+	const functionSource = name =>
+	{
+		const start = source.indexOf(`\tfunction ${name}(`);
+		const end = source.indexOf('\n\tfunction ', start + 1);
+		assert.ok(start >= 0 && end > start);
+		return source.slice(start, end);
+	};
+	let prompts = 0;
+	const requests = [];
+	const run = {status: {textContent: ''}};
+	const context = {agentBusy: false, agentStopping: false, agentInterruptReady: false,
+		agentDisposed: false, agentInput: {value: 'unsent draft'},
+		request: action => { requests.push(action); return Promise.resolve(true); },
+		sendAgentPrompt: () => { prompts++; }, ensureAgentRun: () => run,
+		updateAgentControls: () => {}, scrollAgentMessages: () => {}};
+	runInNewContext(['requestAgentStop', 'stopAgent', 'handleAgentSendClick', 'updateAgentProgress']
+		.map(functionSource).join('\n'), context);
+	context.handleAgentSendClick();
+	assert.equal(prompts, 1);
+	context.agentBusy = true;
+	context.agentInterruptReady = true;
+	context.handleAgentSendClick();
+	context.handleAgentSendClick();
+	assert.deepEqual(requests, ['workspaceAgentInterrupt'], 'repeated clicks do not duplicate abort');
+	assert.equal(prompts, 1, 'busy button never submits another prompt');
+	assert.equal(context.agentInput.value, 'unsent draft');
+	context.agentStopping = false;
+	context.agentInterruptReady = false;
+	context.handleAgentSendClick();
+	assert.equal(requests.length, 1, 'preparing task has no backend turn to abort yet');
+	context.updateAgentProgress({type: 'status', phase: 'connecting'});
+	assert.deepEqual(requests, ['workspaceAgentInterrupt', 'workspaceAgentInterrupt']);
 });
 
 test('editor Agent panel uses the file-safe direct editing lifecycle', async () =>
