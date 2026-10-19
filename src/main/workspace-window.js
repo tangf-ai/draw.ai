@@ -1,6 +1,7 @@
 import {watch as watchFileSystem, promises as fs} from 'fs';
 import path from 'path';
 import url from 'url';
+import {createWorkspaceSearcher} from './workspace-search.js';
 import {
 	copyWorkspaceFile,
 	createWorkspaceDiagram,
@@ -67,6 +68,7 @@ export function createWorkspaceController(dependencies)
 	let workspaceWindow = null;
 	let watcher = null;
 	let watcherTimer = null;
+	const searchWorkspace = createWorkspaceSearcher();
 
 	function isWorkspaceSender(frame)
 	{
@@ -196,6 +198,13 @@ export function createWorkspaceController(dependencies)
 	}
 
 	handle('workspace:get-state', () => getState());
+	handle('workspace:search', async (event, query, expectedRoot) =>
+	{
+		const root = getActionRoot(expectedRoot);
+		const result = await searchWorkspace(root, query);
+		getActionRoot(root);
+		return result;
+	});
 	handle('workspace:check-template', () => getState({forceSourceRead: true}));
 
 	handle('workspace:choose-root', async (event) =>

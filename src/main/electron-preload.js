@@ -136,6 +136,7 @@ async function invokeWorkspace(channel, ...args)
 
 contextBridge.exposeInMainWorld('workspaceAPI', {
 	getState: () => invokeWorkspace('workspace:get-state'),
+	search: (query, expectedRoot) => invokeWorkspace('workspace:search', query, expectedRoot),
 	chooseRoot: () => invokeWorkspace('workspace:choose-root'),
 	useDefaultRoot: () => invokeWorkspace('workspace:use-default-root'),
 	createDirectory: (parentRelativePath, name) =>

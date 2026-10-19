@@ -105,6 +105,20 @@ async function workspaceControllerFixture(t)
 
 describe('editor workspace file actions', () =>
 {
+	test('guards content search by sender and current workspace root', async t =>
+	{
+		const f = await workspaceControllerFixture(t);
+		const denied = await f.handlers.get('workspace:search')({senderFrame: {url: 'https://example.com'}}, '测试');
+		assert.equal(denied.code, 'INVALID_SENDER');
+		const stale = await f.call('workspace:search', '测试', '/stale/workspace');
+		assert.equal(stale.ok, false);
+		assert.match(stale.error, /工作区已切换/);
+		const result = await f.call('workspace:search', '测试', f.root);
+		assert.equal(result.ok, true);
+		assert.equal(result.data.root, f.root);
+		assert.equal(result.data.results[0].relativePath, '测试.drawio');
+	});
+
 	test('rejects actions carrying a stale workspace root', async t =>
 	{
 		const f = await workspaceControllerFixture(t);

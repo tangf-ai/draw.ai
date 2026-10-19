@@ -158,7 +158,11 @@ async function runRendererChecks()
 			features: [{name: 'prefers-reduced-motion', value: 'reduce'}]
 		});
 		assert.equal(await checkCompanion(`
-			await new Promise(resolve => setTimeout(resolve, 50));
+			// Media-query change events can arrive after the CSS update in a hidden window.
+			const deadline = Date.now() + 3000;
+			while (agentTimers.size !== 0 && Date.now() < deadline) {
+				await new Promise(resolve => setTimeout(resolve, 25));
+			}
 			return agentTimers.size === 0 &&
 				getComputedStyle(document.querySelector('.geAgentSketchNode')).animationName === 'none';
 		`), true, 'reduced motion disables animation and automatic rotation');
