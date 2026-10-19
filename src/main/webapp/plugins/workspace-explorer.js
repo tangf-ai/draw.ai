@@ -12,6 +12,14 @@ Draw.loadPlugin(function(ui)
 	var state = null;
 	var currentDirectory = '';
 	var searchQuery = '';
+	var searchResults = Object.create(null);
+	var searchTimer = null;
+	var searchVersion = 0;
+	var searchState = null;
+	var searchPending = false;
+	var searchError = '';
+	var searchSkipped = 0;
+	var destroyed = false;
 	var expanded = {};
 	var draggedRelativePath = null;
 	var graphModelListener = null;
@@ -80,6 +88,10 @@ Draw.loadPlugin(function(ui)
 		'.geWorkspaceRow.geWorkspaceSelected{background:light-dark(#fef3e2,#413323)}',
 		'.geWorkspaceRow .geWorkspaceFolder{color:light-dark(#c77c18,#f0b45b)}',
 		'.geWorkspaceRowLabel{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+		'.geWorkspaceRow.geWorkspaceContentMatch{height:48px}',
+		'.geWorkspaceMatchLabel{display:flex;flex-direction:column;gap:4px;flex:1}',
+		'.geWorkspaceSnippet{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:light-dark(#70757a,#bdc1c6);font-size:11px;font-weight:400}',
+		'.geWorkspaceSnippet mark{background:light-dark(#fff1b8,#66520b);color:inherit;border-radius:2px}',
 		'.geWorkspaceEntry{position:relative;display:flex;align-items:center}',
 		'.geWorkspaceEntry .geWorkspaceRow{padding-right:32px}',
 		'.geWorkspaceMore{position:absolute;right:2px;top:1px;opacity:0;font-size:21px}',
@@ -148,7 +160,10 @@ Draw.loadPlugin(function(ui)
 	search.appendChild(icon('search'));
 	var searchInput = element('input');
 	searchInput.type = 'search';
-	searchInput.placeholder = '搜索图纸';
+	searchInput.placeholder = '搜索文件名或图纸内容';
+	searchInput.setAttribute('aria-label', searchInput.placeholder);
+	searchInput.maxLength = 256;
+	searchInput.title = '搜索已保存的图纸文字和页面名称，支持 draw.io、XML、SVG、Mermaid、CSV；PNG、PDF、Visio 文件仅匹配文件名';
 	searchInput.autocomplete = 'off';
 	search.appendChild(searchInput);
 	var tree = element('div', 'geWorkspaceTree');
@@ -164,6 +179,7 @@ Draw.loadPlugin(function(ui)
 	newFileButton.appendChild(icon('plus'));
 	newFileButton.appendChild(document.createTextNode('图文件'));
 	var footerStatus = element('span', 'geWorkspaceFooterStatus');
+	footerStatus.setAttribute('role', 'status');
 	footer.appendChild(newFolderButton);
 	footer.appendChild(newFileButton);
 	footer.appendChild(footerStatus);
@@ -193,7 +209,56 @@ Draw.loadPlugin(function(ui)
 	{
 		if (searchQuery === '') return true;
 		if (item.name.toLowerCase().indexOf(searchQuery) >= 0) return true;
+		if (searchResults[item.relativePath] != null) return true;
 		return item.type === 'directory' && item.children.some(matchesSearch);
+	}
+
+	function scheduleSearch()
+	{
+		if (searchTimer != null) window.clearTimeout(searchTimer);
+		searchTimer = null;
+		var version = ++searchVersion;
+		var root = state?.root;
+		var query = searchQuery;
+		searchState = state;
+		searchResults = Object.create(null);
+		searchError = '';
+		searchSkipped = 0;
+		searchPending = !!query && !!root;
+		if (!searchPending || destroyed) return;
+		searchTimer = window.setTimeout(function()
+		{
+			searchTimer = null;
+			api.search(query, root).then(function(result)
+			{
+				if (destroyed || version !== searchVersion || state?.root !== root) return;
+				if (result.root !== root || result.query !== query) return;
+				result.results.forEach(function(match) { searchResults[match.relativePath] = match; });
+				searchSkipped = result.skippedFiles;
+				searchPending = false;
+				render();
+			}).catch(function(error)
+			{
+				if (destroyed || version !== searchVersion || state?.root !== root) return;
+				searchPending = false;
+				searchError = error?.message || '内容搜索失败';
+				render();
+			});
+		}, 220);
+	}
+
+	function appendSnippet(label, text)
+	{
+		var line = element('span', 'geWorkspaceSnippet');
+		var index = text.toLowerCase().indexOf(searchQuery);
+		if (index < 0) line.textContent = text;
+		else
+		{
+			line.appendChild(document.createTextNode(text.slice(0, index)));
+			line.appendChild(element('mark', '', text.slice(index, index + searchQuery.length)));
+			line.appendChild(document.createTextNode(text.slice(index + searchQuery.length)));
+		}
+		label.appendChild(line);
 	}
 
 	function parentPath(relativePath)
@@ -573,7 +638,16 @@ Draw.loadPlugin(function(ui)
 			});
 		}
 
-		row.appendChild(element('span', 'geWorkspaceRowLabel', item.name));
+		var label = element('span', 'geWorkspaceRowLabel', item.name);
+		var match = searchResults[item.relativePath];
+		if (searchQuery && item.type === 'file' && match?.snippet)
+		{
+			row.classList.add('geWorkspaceContentMatch');
+			label.classList.add('geWorkspaceMatchLabel');
+			appendSnippet(label, match.snippet);
+			row.title += '\n内容：' + match.snippet;
+		}
+		row.appendChild(label);
 		if (item.type === 'file')
 		{
 			var entry = element('div', 'geWorkspaceEntry');
@@ -608,7 +682,9 @@ Draw.loadPlugin(function(ui)
 
 	function render()
 	{
+		if (searchState !== state) scheduleSearch();
 		tree.textContent = '';
+		tree.setAttribute('aria-busy', String(searchPending));
 
 		if (state == null || state.root == null)
 		{
@@ -644,10 +720,15 @@ Draw.loadPlugin(function(ui)
 
 		if (tree.childNodes.length === 0)
 		{
-			tree.appendChild(element('div', 'geWorkspaceEmpty', searchQuery ? '没有匹配的图纸' : '工作区暂无图纸'));
+			tree.appendChild(element('div', 'geWorkspaceEmpty', searchQuery ?
+				(searchPending ? '正在搜索图纸内容…' : (searchError ? '内容搜索失败，请刷新重试' : '没有匹配的图纸')) : '工作区暂无图纸'));
 		}
 
-		footerStatus.textContent = (state.counts?.files || 0) + ' 个图文件';
+		var matchedFiles = tree.querySelectorAll('.geWorkspaceEntry').length;
+		footerStatus.textContent = searchQuery ? (searchPending ? '正在搜索内容…' :
+			(searchError ? '内容搜索失败' : matchedFiles + ' 个匹配' + (searchSkipped ? ' · 部分未搜索' : ''))) :
+			(state.counts?.files || 0) + ' 个图文件';
+		footerStatus.title = searchError || (searchSkipped ? searchSkipped + ' 个文件因过大、读取或解析失败，内容未完整搜索' : '');
 	}
 
 	function showError(error)
@@ -811,6 +892,7 @@ Draw.loadPlugin(function(ui)
 	searchInput.addEventListener('input', function()
 	{
 		searchQuery = searchInput.value.trim().toLowerCase();
+		scheduleSearch();
 		render();
 	});
 	tree.addEventListener('dragover', function(event)
@@ -837,6 +919,9 @@ Draw.loadPlugin(function(ui)
 
 	ui.destroyFunctions.push(function()
 	{
+		destroyed = true;
+		searchVersion++;
+		if (searchTimer != null) window.clearTimeout(searchTimer);
 		closeFileMenu();
 		document.removeEventListener('pointerdown', dismissFileMenu, true);
 		if (graphModelListener != null)
