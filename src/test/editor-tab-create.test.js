@@ -63,8 +63,10 @@ async function loadTabHandler(bundle)
 }
 
 function fixture(EditorUi, {canvasWidth = 2000, scale = 1, translateX = 0,
-	parentX = 0, scrollLeft = 0, x = 100, y = 100, width = 120, height = 60} = {})
+	parentX = 0, scrollLeft = 0, x = 100, y = 100, width = 120, height = 60,
+	problemTree = false} = {})
 {
+	const root = {style: problemTree ? 'drawAiDrawingMode=problemTree;' : ''};
 	const parent = {};
 	const source = {vertex: true, parent, style: 'rounded=1;', geometry: {x, y, width, height}};
 	const vertices = [source];
@@ -77,6 +79,7 @@ function fixture(EditorUi, {canvasWidth = 2000, scale = 1, translateX = 0,
 		container: {clientWidth: canvasWidth, scrollLeft},
 		view: {scale, translate: {x: translateX}, getState: () => ({origin: {x: parentX}})},
 		model: {
+			getRoot: () => root,
 			getGeometry: (cell) => cell.geometry,
 			getParent: (cell) => cell.parent,
 			getTerminal: (edge, sourceTerminal) => sourceTerminal ? edge.from : edge.to,
@@ -116,11 +119,17 @@ function fixture(EditorUi, {canvasWidth = 2000, scale = 1, translateX = 0,
 	const ui = new EditorUi();
 	ui.editor = {graph};
 	ui.fallbackCalls = 0;
-	return {graph, ui, source, parent, vertices, edges,
+	return {graph, ui, source, parent, root, vertices, edges,
 		get updates() { return updates; },
 		edit: (cell, value) => { graph.startEditingAtCell(cell); editingValue = value; },
 		type: (value) => { editingValue = value; },
 		compose: (active) => listeners[active ? 'compositionstart' : 'compositionend'](),
+		editingTab: (modifiers = {}) =>
+		{
+			const evt = {keyCode: 9, ...modifiers};
+			listeners.keydown(evt);
+			return evt;
+		},
 		enter: (modifiers = {}) =>
 		{
 			const evt = {keyCode: 13, ...modifiers};
@@ -138,6 +147,71 @@ function fixture(EditorUi, {canvasWidth = 2000, scale = 1, translateX = 0,
 for (const bundle of [false, true])
 {
 	const variant = bundle ? 'production bundle' : 'editor source';
+
+	test(`${variant}: problem-tree Tab expands down and adds non-overlapping branches across one row`, async () =>
+	{
+		const f = fixture(await loadTabHandler(bundle), {problemTree: true});
+		for (let i = 0; i < 7; i++) assert.equal(f.tab().consumed, true);
+		assert.deepEqual(f.vertices.slice(1, 6).map(v => [v.geometry.x, v.geometry.y]),
+			[[100, 200], [260, 200], [-60, 200], [420, 200], [-220, 200]]);
+		for (const edge of f.edges)
+		{
+			assert.equal(edge.from, f.source);
+			assert.match(edge.style, /curved=0/);
+			assert.match(edge.style, /exitX=0.5;exitY=1/);
+			assert.match(edge.style, /entryX=0.5;entryY=0/);
+			assert.match(edge.style, /endArrow=block;endFill=1/);
+		}
+		for (const [i, vertex] of f.vertices.entries())
+			for (const other of f.vertices.slice(i + 1))
+				assert.equal(intersects(vertex.geometry, other.geometry), false);
+		const child = f.vertices[1];
+		f.graph.setSelectionCell(child);
+		f.tab();
+		assert.deepEqual(f.vertices.at(-1).geometry, {x: 100, y: 300, width: 120, height: 60});
+		assert.equal(f.edges.at(-1).from, child);
+		assert.equal(f.updates, 0);
+	});
+
+	test(`${variant}: problem-tree Enter adds a sibling to the right and Tab commits the edited label`, async () =>
+	{
+		const f = fixture(await loadTabHandler(bundle), {problemTree: true});
+		f.edit(f.source, '目标');
+		assert.equal(f.editingTab().consumed, true);
+		assert.equal(f.source.value, '目标');
+		const child = f.vertices[1];
+		f.edit(child, '子问题');
+		f.enter();
+		assert.equal(child.value, '子问题');
+		const sibling = f.vertices[2];
+		assert.deepEqual(sibling.geometry, {x: 260, y: 200, width: 120, height: 60});
+		assert.equal(f.edges[1].from, f.source);
+		assert.match(f.edges[1].style, /exitX=0.5;exitY=1/);
+		assert.equal(f.graph.cellEditor.getEditingCell(), sibling);
+		f.type('另一个子问题');
+		f.editingTab();
+		assert.equal(sibling.value, '另一个子问题');
+		assert.deepEqual(f.vertices[3].geometry, {x: 260, y: 300, width: 120, height: 60});
+		assert.equal(f.edges[2].from, sibling);
+	});
+
+	test(`${variant}: problem-tree mode follows the current root and handles blocked rows and IME`, async () =>
+	{
+		const f = fixture(await loadTabHandler(bundle), {problemTree: true});
+		f.graph.insertVertex(f.parent, null, '', -10000, 200, 20000, 60, '');
+		f.tab();
+		assert.deepEqual(f.vertices.at(-1).geometry, {x: 10040, y: 200, width: 120, height: 60});
+		f.root.style = '';
+		f.tab();
+		assert.deepEqual(f.vertices.at(-1).geometry, {x: 260, y: 100, width: 120, height: 60});
+		f.root.style = 'drawAiDrawingMode=problemTree;';
+		f.edit(f.source, '输入中');
+		for (const modifier of ['shiftKey', 'ctrlKey', 'metaKey', 'altKey', 'isComposing'])
+			assert.equal(f.editingTab({[modifier]: true}).consumed, undefined);
+		f.compose(true);
+		assert.equal(f.editingTab().consumed, undefined);
+		assert.equal(f.vertices.length, 4);
+	});
 
 	test(`${variant}: Enter commits a label and edits a sibling linked to the same parent`, async () =>
 	{

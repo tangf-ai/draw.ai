@@ -29,11 +29,14 @@ jobs:
           for file in src/main/*.js src/workspace/*.js; do node --check "$file"; done
           node --check drawio/src/main/webapp/plugins/workspace-agent.js
           node --check drawio/src/main/webapp/plugins/workspace-explorer.js
+          node --check drawio/src/main/webapp/plugins/common-shapes.js
           for file in package.json electron-builder-*.json; do jq -e . "$file" >/dev/null; done
       - name: Lint
         run: npm run lint
       - name: Run tests
         run: npm test
+      - name: Check problem-tree editor interactions
+        run: npm run test:problem-tree-renderer
       - name: Check patches
         run: |
           git diff --check
