@@ -1,6 +1,7 @@
 Draw.loadPlugin(function(ui)
 {
 	var sidebar = ui.sidebar;
+	var graph = ui.editor.graph;
 	var paletteId = 'draw-ai-common';
 
 	if (sidebar == null || ui.__drawAiCommonShapesInstalled) return;
@@ -32,6 +33,74 @@ Draw.loadPlugin(function(ui)
 	var endStyle = base + 'rounded=1;arcSize=100;fillColor=#FCEBEC;strokeColor=#E0A3AA;fontColor=#96444F;';
 	var processStyle = base + 'shape=rectangle;rounded=0;fillColor=#EAF0FF;strokeColor=#9BB2F0;fontColor=#274690;';
 	var decisionStyle = base + 'rhombus;fillColor=#FFF1E3;strokeColor=#E8BC8D;fontColor=#92571F;';
+	var problemStyle = base + 'shape=rectangle;rounded=0;fillColor=#FFFFFF;strokeColor=#555555;fontColor=#222222;strokeWidth=2;';
+
+	function addDrawingMode(content)
+	{
+		var panel = document.createElement('div');
+		panel.style.cssText = 'padding:8px 2px;border-bottom:1px solid light-dark(#d6d9de,#454950);';
+		var label = document.createElement('label');
+		label.textContent = '绘图模式 ';
+		var select = document.createElement('select');
+		select.setAttribute('aria-label', '绘图模式');
+		select.style.cssText = 'max-width:100%;font:12px Arial,sans-serif;padding:4px;color:inherit;background:light-dark(#fff,#292b30);border:1px solid light-dark(#d6d9de,#454950);border-radius:4px;';
+		[['mindmap', '脑图（向右）'], ['problemTree', '问题树（向下）']].forEach(function(mode)
+		{
+			var option = document.createElement('option');
+			option.value = mode[0];
+			option.textContent = mode[1];
+			select.appendChild(option);
+		});
+		label.appendChild(select);
+		panel.appendChild(label);
+		var hint = document.createElement('div');
+		hint.style.cssText = 'font:11px/1.6 Arial,sans-serif;opacity:0.75;margin-top:6px;';
+		panel.appendChild(hint);
+		var createRoot = document.createElement('button');
+		createRoot.type = 'button';
+		createRoot.className = 'geBtn';
+		createRoot.textContent = '新建目标节点';
+		createRoot.style.marginTop = '6px';
+		panel.appendChild(createRoot);
+		content.appendChild(panel);
+
+		function refresh()
+		{
+			var vertical = EditorUi.isProblemTree(graph);
+			select.value = vertical ? 'problemTree' : 'mindmap';
+			select.disabled = !graph.isEnabled();
+			createRoot.disabled = !graph.isEnabled() || graph.isCellLocked(graph.getDefaultParent());
+			createRoot.style.display = vertical ? '' : 'none';
+			hint.textContent = vertical ? 'Tab 向下添加子节点；编辑时 Enter 向右添加同级，Shift+Enter 换行。' :
+				'Tab 向右添加子节点；编辑时 Enter 向下添加同级。';
+		}
+		select.addEventListener('change', function()
+		{
+			if (!graph.isEnabled()) return refresh();
+			graph.stopEditing(false);
+			var root = graph.model.getRoot();
+			graph.model.setStyle(root, mxUtils.setStyle(root.style || '', 'drawAiDrawingMode',
+				select.value === 'problemTree' ? 'problemTree' : null));
+			graph.container.focus();
+		});
+		createRoot.addEventListener('click', function()
+		{
+			var parent = graph.getDefaultParent();
+			if (!graph.isEnabled() || graph.isCellLocked(parent)) return;
+			graph.stopEditing(false);
+			var point = graph.getFreeInsertPoint();
+			var cell = graph.insertVertex(parent, null, '目标', point.x, point.y, 240, 80,
+				problemStyle + 'fillColor=#EEEEEE;fontStyle=1;');
+			graph.setSelectionCell(cell);
+			graph.scrollCellToVisible(cell);
+			graph.startEditingAtCell(cell);
+		});
+		graph.model.addListener(mxEvent.CHANGE, refresh);
+		ui.editor.addListener('pageSelected', refresh);
+		ui.editor.addListener('fileLoaded', refresh);
+		graph.addListener('enabledChanged', refresh);
+		refresh();
+	}
 
 	function vertex(value, style, x, y, width, height)
 	{
@@ -159,6 +228,7 @@ Draw.loadPlugin(function(ui)
 	sidebar.addPalette(paletteId, '常用', true, function(content)
 	{
 		content.classList.add('geCommonShapes');
+		addDrawingMode(content);
 		sections.forEach(function(section)
 		{
 			var heading = document.createElement('div');

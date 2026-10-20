@@ -1329,23 +1329,35 @@
 	var editorUiTabCreateGap = 40;
 	var editorUiTabCreateMaxRows = 100;
 
+	// Store the direction on the model root so it survives save, page switches
+	// and undo without changing any existing node or connector styles.
+	EditorUi.isProblemTree = function(graph)
+	{
+		var root = graph.model.getRoot != null ? graph.model.getRoot() : null;
+		return root != null && /(?:^|;)drawAiDrawingMode=problemTree(?:;|$)/.test(root.style || '');
+	};
+
 	/**
-	 * Adds mind-map branches in one column to the right of the selected parent.
-	 * Search alternately below and above its center, avoiding existing vertices.
+	 * Adds branches to the right for mind maps or below for problem trees.
+	 * Search alternately around the parent center, avoiding existing vertices.
 	 * Geometry alone determines the next slot, including after undo or reload.
 	 */
 	function editorUiFindTabCreatePosition(graph, parent, source, width, height)
 	{
 		var sourceGeometry = graph.model.getGeometry(source);
-		var baseX = Math.round(sourceGeometry.x + sourceGeometry.width + editorUiTabCreateGap);
-		var baseY = Math.round(sourceGeometry.y + (sourceGeometry.height - height) / 2);
-		var stepY = Math.max(1, Math.ceil(height + editorUiTabCreateGap));
+		var vertical = EditorUi.isProblemTree(graph);
+		var baseX = Math.round(vertical ? sourceGeometry.x + (sourceGeometry.width - width) / 2 :
+			sourceGeometry.x + sourceGeometry.width + editorUiTabCreateGap);
+		var baseY = Math.round(vertical ? sourceGeometry.y + sourceGeometry.height + editorUiTabCreateGap :
+			sourceGeometry.y + (sourceGeometry.height - height) / 2);
+		var step = Math.max(1, Math.ceil((vertical ? width : height) + editorUiTabCreateGap));
 		var vertices = graph.getChildVertices(parent);
 
 		for (var index = 0; index < editorUiTabCreateMaxRows; index++)
 		{
 			var row = (index % 2 == 1) ? (index + 1) / 2 : -index / 2;
-			var candidate = new mxRectangle(baseX, baseY + row * stepY, width, height);
+			var candidate = new mxRectangle(baseX + (vertical ? row * step : 0),
+				baseY + (vertical ? 0 : row * step), width, height);
 			var occupied = false;
 
 			for (var i = 0; i < vertices.length; i++)
@@ -1366,8 +1378,8 @@
 			}
 		}
 
-		// Keep every fallback in the same branch column instead of extending right.
-		var bottom = baseY;
+		// Keep fallback branches on the same level even when the search area fills.
+		var end = vertical ? baseX : baseY;
 
 		for (var j = 0; j < vertices.length; j++)
 		{
@@ -1375,11 +1387,13 @@
 
 			if (childGeometry != null && !childGeometry.relative)
 			{
-				bottom = Math.max(bottom, childGeometry.y + childGeometry.height + editorUiTabCreateGap);
+				end = Math.max(end, (vertical ? childGeometry.x + childGeometry.width :
+					childGeometry.y + childGeometry.height) + editorUiTabCreateGap);
 			}
 		}
 
-		return new mxRectangle(baseX, Math.ceil(bottom), width, height);
+		return new mxRectangle(vertical ? Math.ceil(end) : baseX,
+			vertical ? baseY : Math.ceil(end), width, height);
 	}
 
 	/**
@@ -1397,7 +1411,10 @@
 
 		var source = selectedCells[0];
 
-		if (!graph.model.isVertex(source) || graph.isCellLocked(source))
+		if (!graph.model.isVertex(source) || graph.isCellLocked(source) ||
+			(graph.isTable && graph.isTable(source)) ||
+			(graph.isTableRow && graph.isTableRow(source)) ||
+			(graph.isTableCell && graph.isTableCell(source)))
 		{
 			return null;
 		}
@@ -1424,8 +1441,11 @@
 			var edgeStyle = (typeof graph.createCurrentEdgeStyle == 'function') ?
 				graph.createCurrentEdgeStyle() : '';
 			graph.insertEdge(parent, null, '', source, vertex, (edgeStyle || '') +
-				';edgeStyle=orthogonalEdgeStyle;curved=1;rounded=1;exitX=1;exitY=0.5;' +
-				'entryX=0;entryY=0.5;startArrow=none;endArrow=none;');
+				(EditorUi.isProblemTree(graph) ?
+					';edgeStyle=orthogonalEdgeStyle;curved=0;rounded=1;exitX=0.5;exitY=1;' +
+					'entryX=0.5;entryY=0;startArrow=none;endArrow=block;endFill=1;' :
+					';edgeStyle=orthogonalEdgeStyle;curved=1;rounded=1;exitX=1;exitY=0.5;' +
+					'entryX=0;entryY=0.5;startArrow=none;endArrow=none;'));
 		}
 		finally
 		{
@@ -1435,6 +1455,7 @@
 		// Keep the parent selected so repeated Tab adds sibling branches. Selecting
 		// one of those branches explicitly makes it the parent of the next level.
 		graph.setSelectionCell(source);
+		graph.scrollCellToVisible(vertex);
 
 		return vertex;
 	}
@@ -1475,8 +1496,9 @@
 			var geometry = graph.model.getGeometry(source);
 			var width = Math.max(1, Number(geometry.width) || 1);
 			var height = Math.max(1, Number(geometry.height) || 1);
-			var x = Math.round(geometry.x);
-			var y = Math.round(geometry.y + geometry.height + editorUiTabCreateGap);
+			var vertical = EditorUi.isProblemTree(graph);
+			var x = Math.round(geometry.x + (vertical ? geometry.width + editorUiTabCreateGap : 0));
+			var y = Math.round(geometry.y + (vertical ? 0 : geometry.height + editorUiTabCreateGap));
 			var vertices = graph.getChildVertices(parent);
 			var occupied;
 
@@ -1491,7 +1513,8 @@
 
 					if (other != null && !other.relative && mxUtils.intersects(candidate, other))
 					{
-						y = Math.ceil(other.y + other.height + editorUiTabCreateGap);
+						if (vertical) x = Math.ceil(other.x + other.width + editorUiTabCreateGap);
+						else y = Math.ceil(other.y + other.height + editorUiTabCreateGap);
 						occupied = true;
 						break;
 					}
@@ -1503,7 +1526,9 @@
 
 			if (branchParent != null)
 			{
-				graph.insertEdge(parent, null, '', branchParent, vertex, incomingEdge.style);
+				graph.insertEdge(parent, null, '', branchParent, vertex, incomingEdge.style +
+					(vertical ? ';edgeStyle=orthogonalEdgeStyle;curved=0;rounded=1;exitX=0.5;exitY=1;' +
+						'entryX=0.5;entryY=0;startArrow=none;endArrow=block;endFill=1;' : ''));
 			}
 		}
 		finally
@@ -1528,13 +1553,22 @@
 		elt.addEventListener('blur', function() { composing = false; });
 		elt.addEventListener('keydown', function(evt)
 		{
-			if (evt.keyCode != 13 || evt.isComposing || composing ||
+			var childKey = evt.keyCode == 9 && EditorUi.isProblemTree(cellEditor.graph);
+			if ((evt.keyCode != 13 && !childKey) || evt.isComposing || composing ||
 				evt.ctrlKey || evt.metaKey || evt.altKey || mxEvent.isConsumed(evt)) return;
 
 			var source = editorUiGetSiblingSource(cellEditor.graph);
 			if (source == null) return;
 
-			if (evt.shiftKey)
+			if (childKey)
+			{
+				if (evt.shiftKey) return;
+				mxEvent.consume(evt);
+				cellEditor.graph.stopEditing(false);
+				cellEditor.graph.setSelectionCell(source);
+				editorUiCreateTabVertex(cellEditor.graph);
+			}
+			else if (evt.shiftKey)
 			{
 				// Keep the browser's soft line break, including on Safari.
 				mxEvent.consume(evt, false);
