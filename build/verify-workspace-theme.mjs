@@ -25,7 +25,8 @@ for (const archive of archives)
 		`Nested build output in ${archive}`);
 	for (const file of ['src/workspace/index.html', 'src/workspace/workspace.css', 'src/workspace/workspace.js'])
 	{
-		assert.deepEqual(extractFile(archive, file), await readFile(file), `${archive}: ${file}`);
+		// ASAR's directory lookup uses the host platform's path separator.
+		assert.deepEqual(extractFile(archive, path.normalize(file)), await readFile(file), `${archive}: ${file}`);
 	}
 	assert.equal(JSON.parse(extractFile(archive, 'package.json').toString()).version, version);
 	console.log(`Verified workspace theme and version ${version}: ${archive}`);
