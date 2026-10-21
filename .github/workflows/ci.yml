@@ -37,6 +37,8 @@ jobs:
         run: npm test
       - name: Check problem-tree editor interactions
         run: npm run test:problem-tree-renderer
+      - name: Check workspace theme
+        run: npm run test:theme-renderer
       - name: Check patches
         run: |
           git diff --check

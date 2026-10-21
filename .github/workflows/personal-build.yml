@@ -57,6 +57,8 @@ jobs:
             # dmg/zip on macOS, AppImage/deb/rpm on Linux
             npx electron-builder --config electron-builder-linux-mac.json --publish never
           fi
+      - name: Verify packaged workspace theme
+        run: node build/verify-workspace-theme.mjs
       - name: Verify macOS bundles and disk images
         if: ${{ inputs.platform == 'macos' }}
         run: |

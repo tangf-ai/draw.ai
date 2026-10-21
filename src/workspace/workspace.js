@@ -479,6 +479,7 @@ function createTreeRow(node, depth)
 	const button = document.createElement('button');
 	button.type = 'button';
 	button.className = `tree-row${currentDirectory === node.relativePath && !searchQuery ? ' is-active' : ''}`;
+	if (currentDirectory === node.relativePath && !searchQuery) button.setAttribute('aria-current', 'page');
 	button.style.paddingLeft = `${9 + depth * 18}px`;
 	button.dataset.path = node.relativePath;
 	button.title = node.name;
@@ -495,7 +496,7 @@ function createTreeRow(node, depth)
 		button.appendChild(spacer);
 	}
 
-	button.appendChild(svgIcon('folder', 'folder-icon'));
+	button.appendChild(svgIcon(node.relativePath ? 'folder' : 'grid', 'folder-icon'));
 	const label = document.createElement('span');
 	label.className = 'tree-label';
 	label.textContent = node.name;
@@ -630,7 +631,8 @@ function createFileRow(node)
 	{
 		const fileIcon = document.createElement('span');
 		fileIcon.className = 'file-type-icon';
-		fileIcon.textContent = node.extension === 'drawio' ? 'DRAW' : node.extension.slice(0, 4).toUpperCase();
+		fileIcon.setAttribute('aria-hidden', 'true');
+		fileIcon.appendChild(svgIcon('diagram'));
 		nameButton.appendChild(fileIcon);
 	}
 
