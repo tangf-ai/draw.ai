@@ -56,7 +56,13 @@ async function runRendererChecks()
 		console.log('Agent Markdown renderer: formatting, streaming, HTML sanitization, URL filtering and fallback passed');
 
 		await window.setContentSize(1000, 900);
+		window.webContents.debugger.attach('1.3');
+		await window.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', {
+			features: [{name: 'prefers-reduced-motion', value: 'no-preference'}]
+		});
 		await window.webContents.executeJavaScript(`(() => {
+			// Hidden CI windows and runner accessibility settings must not control fixture timers.
+			Object.defineProperty(document, 'hidden', {configurable: true, get: () => false});
 			window.agentTimers = new Map();
 			let timerId = 0;
 			window.setInterval = callback => { agentTimers.set(++timerId, callback); return timerId; };
@@ -156,10 +162,9 @@ async function runRendererChecks()
 				getComputedStyle(document.querySelector('.geAgentSketchNode')).animationPlayState === 'paused';
 			hidden = false;
 			document.dispatchEvent(new Event('visibilitychange'));
-			delete document.hidden;
+			Object.defineProperty(document, 'hidden', {configurable: true, get: () => false});
 			return paused && agentTimers.size === 1;
 		`), true, 'background visibility pauses animation and quote rotation');
-		window.webContents.debugger.attach('1.3');
 		await window.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', {
 			features: [{name: 'prefers-reduced-motion', value: 'reduce'}]
 		});
@@ -172,8 +177,9 @@ async function runRendererChecks()
 			return agentTimers.size === 0 &&
 				getComputedStyle(document.querySelector('.geAgentSketchNode')).animationName === 'none';
 		`), true, 'reduced motion disables animation and automatic rotation');
-		await window.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', {features: []});
-		window.webContents.debugger.detach();
+		await window.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', {
+			features: [{name: 'prefers-reduced-motion', value: 'no-preference'}]
+		});
 		assert.equal(await checkCompanion(`
 			document.querySelector('.geAgentInput').value = '整理图纸';
 			document.querySelector('.geAgentSend').click();
