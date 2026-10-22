@@ -3998,7 +3998,7 @@ ipcMain.on("rendererReq", async (event, args) =>
 			ret = await workspaceAgentService.approve(args.input);
 			break;
 		case 'workspaceAgentSteer':
-			ret = await workspaceAgentService.steer(args.text);
+			ret = await workspaceAgentService.steer(args.text, args.images);
 			break;
 		case 'workspaceAgentInterrupt':
 			ret = await workspaceAgentService.interrupt();

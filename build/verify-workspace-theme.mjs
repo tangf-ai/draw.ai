@@ -23,11 +23,15 @@ for (const archive of archives)
 	assert.ok((await stat(archive)).size < 524288000, `Oversized ASAR: ${archive}`);
 	assert.equal(listPackage(archive).some(file => /^[/\\]dist([/\\]|$)/.test(file)), false,
 		`Nested build output in ${archive}`);
-	for (const file of ['src/workspace/index.html', 'src/workspace/workspace.css', 'src/workspace/workspace.js'])
+	for (const file of ['src/workspace/index.html', 'src/workspace/workspace.css', 'src/workspace/workspace.js',
+		'src/main/workspace-agent.js', 'src/main/electron.js', 'src/main/electron-preload.js',
+		'src/main/workspace-files.js', 'src/main/workspace-window.js', 'src/workspace/preload.js',
+		'drawio/src/main/webapp/plugins/workspace-agent.js',
+		'drawio/src/main/webapp/plugins/workspace-explorer.js'])
 	{
 		// ASAR's directory lookup uses the host platform's path separator.
 		assert.deepEqual(extractFile(archive, path.normalize(file)), await readFile(file), `${archive}: ${file}`);
 	}
 	assert.equal(JSON.parse(extractFile(archive, 'package.json').toString()).version, version);
-	console.log(`Verified workspace theme and version ${version}: ${archive}`);
+	console.log(`Verified workspace theme, AI assistant, directory moves and version ${version}: ${archive}`);
 }

@@ -928,8 +928,8 @@ async function ensureDestinationAvailable(target)
 {
 	try
 	{
-		await fs.access(target);
-		throw workspaceError('目标目录中已有同名文件', 'ALREADY_EXISTS');
+		await fs.lstat(target);
+		throw workspaceError('目标目录中已有同名文件或目录', 'ALREADY_EXISTS');
 	}
 	catch (error)
 	{
@@ -978,6 +978,40 @@ export async function moveWorkspaceFile(root, relativePath, destinationRelativeP
 	await ensureDestinationAvailable(destination.target);
 	await fs.rename(source.absolutePath, destination.target);
 	return toRelative(destination.root, destination.target);
+}
+
+async function getVisibleWorkspaceDirectory(root, relativePath)
+{
+	const resolved = await getDirectory(root, relativePath);
+	const input = relativePath.split(/[\\/]+/).join('/');
+	if (toRelative(resolved.root, resolved.target) !== input ||
+		input.split('/').some(shouldIgnoreEntry))
+	{
+		throw workspaceError('只能移动工作区中的可见目录', 'INVALID_DIRECTORY_OPERATION');
+	}
+	return resolved;
+}
+
+export async function moveWorkspaceDirectory(root, relativePath, destinationRelativePath)
+{
+	const source = await getVisibleWorkspaceDirectory(root, relativePath);
+	if (source.target === source.root)
+	{
+		throw workspaceError('不能移动工作区根目录', 'ROOT_OPERATION_NOT_ALLOWED');
+	}
+	const directory = await getVisibleWorkspaceDirectory(root, destinationRelativePath);
+	if (directory.target === source.target || directory.target.startsWith(source.target + path.sep))
+	{
+		throw workspaceError('不能将目录移入自身或其子目录', 'INVALID_DESTINATION');
+	}
+	const destination = path.join(directory.target, path.basename(source.target));
+	if (destination === source.target)
+	{
+		throw workspaceError('目录已经在所选位置中', 'SAME_DIRECTORY');
+	}
+	await ensureDestinationAvailable(destination);
+	await fs.rename(source.target, destination);
+	return toRelative(source.root, destination);
 }
 
 export async function copyWorkspaceFile(root, relativePath, destinationRelativePath)

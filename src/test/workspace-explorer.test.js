@@ -5,6 +5,7 @@ import os from 'os';
 import path from 'path';
 import {fileURLToPath} from 'url';
 import {createWorkspaceController} from '../main/workspace-window.js';
+import {runInNewContext} from 'node:vm';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -53,11 +54,12 @@ describe('editor workspace explorer', () =>
 	{
 		const manager = await source('src/workspace/workspace.js');
 
-		assert.match(manager, /row\.draggable = true/);
+		assert.match(manager, /addDragSource\(row, node\)/);
+		assert.match(manager, /target\.draggable = true/);
 		assert.match(manager, /application\/x-draw-ai-workspace-file/);
 		assert.match(manager, /button\.addEventListener\('dragover'/);
 		assert.match(manager, /button\.addEventListener\('drop'/);
-		assert.match(manager, /api\.moveFile\(relativePath, destinationRelativePath\)/);
+		assert.match(manager, /api\.moveFile\(item\.relativePath, destinationRelativePath, workspaceState\.root\)/);
 	});
 
 	test('wires manager directory rows to main-list drop targets', async () =>
@@ -90,8 +92,10 @@ async function workspaceControllerFixture(t)
 	await writeFile(path.join(root, '测试.drawio'), '<mxfile>latest saved contents</mxfile>');
 	const handlers = new Map();
 	const authorized = [];
+	const notifications = [];
 	const controller = createWorkspaceController({
-		app: {}, BrowserWindow: {}, dialog: {},
+		app: {}, BrowserWindow: {getAllWindows: () => [{isDestroyed: () => false,
+			webContents: {send: (channel, data) => notifications.push({channel, data})}}]}, dialog: {},
 		ipcMain: {handle: (channel, action) => handlers.set(channel, action)},
 		store: {get: () => root},
 		isEditorSender: frame => frame?.url === 'test://editor',
@@ -99,12 +103,67 @@ async function workspaceControllerFixture(t)
 		shell: {trashItem: file => rename(file, path.join(root, '.trash', path.basename(file)))}
 	});
 	t.after(() => controller.stop());
-	return {root, authorized, call: (channel, ...args) =>
+	return {root, authorized, notifications, call: (channel, ...args) =>
 		handlers.get(channel)({senderFrame: {url: 'test://editor'}}, ...args), handlers};
 }
 
 describe('editor workspace file actions', () =>
 {
+	test('directory moves validate the sender and root, then notify open editors with both paths', async t =>
+	{
+		const f = await workspaceControllerFixture(t);
+		await mkdir(path.join(f.root, '源目录/子目录'), {recursive: true});
+		await writeFile(path.join(f.root, '源目录/子目录/图纸.drawio'), 'saved');
+		const denied = await f.handlers.get('workspace:move-directory')(
+			{senderFrame: {url: 'https://example.com'}}, '源目录', '目标', f.root);
+		assert.equal(denied.code, 'INVALID_SENDER');
+		assert.equal((await f.call('workspace:move-directory', '源目录', '目标', '/stale')).ok, false);
+		assert.equal((await f.call('workspace:move-directory', '源目录', '源目录/子目录', f.root)).ok, false);
+		assert.equal(f.notifications.length, 0);
+		const result = await f.call('workspace:move-directory', '源目录', '目标', f.root);
+		assert.equal(result.ok, true);
+		assert.equal(result.data.movedRelativePath, '目标/源目录');
+		assert.equal(result.data.absolutePath, path.join(f.root, '目标/源目录'));
+		assert.deepEqual(f.notifications, [{channel: 'workspace:moved', data: {
+			root: f.root, oldRelativePath: '源目录', movedRelativePath: '目标/源目录',
+			oldAbsolutePath: path.join(f.root, '源目录'), absolutePath: path.join(f.root, '目标/源目录')
+		}}]);
+		assert.equal(await readFile(path.join(f.root, '目标/源目录/子目录/图纸.drawio'), 'utf8'), 'saved');
+	});
+
+	test('open diagrams follow moved ancestor directories without replacing their model or undo history', async () =>
+	{
+		const plugin = await source('drawio/src/main/webapp/plugins/workspace-explorer.js');
+		const start = plugin.indexOf('\tfunction handleMovedDirectory(');
+		const end = plugin.indexOf('\n\tfunction matchesSearch(', start);
+		const file = {fileObject: {path: '/workspace/源/子/图.drawio', draftFileName: '/workspace/源/子/.draft'},
+			descriptorChanged() { this.descriptorUpdates = (this.descriptorUpdates || 0) + 1; }};
+		const undoHistory = ['unsaved edit'];
+		let enabled = true;
+		let watched = null;
+		let authorized = null;
+		const context = {
+			state: {root: '/workspace'}, currentDirectory: '源/子',
+			ui: {getCurrentFile: () => file, editor: {graph: {undoHistory,
+				isEnabled: () => enabled, setEnabled: value => { enabled = value; }, stopEditing() {}}},
+				watchFile: value => { watched = value; }},
+			currentFilePath: () => file.fileObject.path,
+			normalizedPath: value => value.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase(),
+			api: {resolveItem: async value => { authorized = value; return {absolutePath: '/workspace/' + value}; }}
+		};
+		runInNewContext(plugin.slice(start, end) + '\nthis.moved = handleMovedDirectory;', context);
+		await context.moved({root: '/workspace', oldRelativePath: '源', movedRelativePath: '目标/源',
+			oldAbsolutePath: '/workspace/源', absolutePath: '/workspace/目标/源'});
+		assert.equal(file.fileObject.path, '/workspace/目标/源/子/图.drawio');
+		assert.equal(file.fileObject.draftFileName, '/workspace/目标/源/子/.draft');
+		assert.equal(context.currentDirectory, '目标/源/子');
+		assert.equal(authorized, '目标/源/子/图.drawio');
+		assert.equal(watched, file);
+		assert.equal(enabled, true);
+		assert.deepEqual(undoHistory, ['unsaved edit']);
+		await context.moved({root: '/other', oldAbsolutePath: '/workspace/目标', oldRelativePath: '目标'});
+		assert.equal(file.descriptorUpdates, 1);
+	});
 	test('guards content search by sender and current workspace root', async t =>
 	{
 		const f = await workspaceControllerFixture(t);

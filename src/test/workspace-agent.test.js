@@ -15,6 +15,8 @@ import {
 
 const ORIGINAL_DIAGRAM = '<mxfile host="draw.ai"><diagram id="page-1" name="Page-1"><mxGraphModel><root><mxCell id="0"/></root></mxGraphModel></diagram></mxfile>';
 const UPDATED_DIAGRAM = '<mxfile host="draw.ai"><diagram id="page-1" name="Page-1"><mxGraphModel><root><mxCell id="0"/><mxCell id="1" value="Updated" vertex="1" parent="0"/></root></mxGraphModel></diagram></mxfile>';
+const TEST_IMAGE = {name: '参考图.png', mimeType: 'image/png',
+	data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII='};
 
 class MemoryStore
 {
@@ -307,6 +309,65 @@ test('keeps one Pi process and resumes a persistent workspace session', async ()
 		assert.equal(argumentValue(server.spawns[1].args, '--session-id'), sessionId,
 			'the restarted Pi process resumes the stored session');
 		assert.equal(server.requests.filter(request => request.type === 'get_state').length, 2);
+	}
+	finally
+	{
+		service.stop();
+		await rm(files.temporary, {recursive: true, force: true});
+	}
+});
+
+test('passes image bytes to Pi, supports image-only prompts and keeps UI history lightweight', async () =>
+{
+	const files = await fixture();
+	const server = fakePiRpc();
+	const store = new MemoryStore();
+	let service = serviceFor(files, server, store);
+	try
+	{
+		await service.chat({prompt: '按参考图重绘', images: [TEST_IMAGE], filePath: files.diagram,
+			context: PAGE_CONTEXT});
+		await service.chat({images: [TEST_IMAGE], filePath: files.diagram, context: PAGE_CONTEXT});
+		await service.chat({prompt: '继续', filePath: files.diagram, context: PAGE_CONTEXT});
+		const prompts = server.requests.filter(request => request.type === 'prompt');
+		assert.deepEqual(prompts[0].images,
+			[{type: 'image', mimeType: TEST_IMAGE.mimeType, data: TEST_IMAGE.data}]);
+		assert.match(prompts[1].message, /请根据附图/);
+		assert.equal(prompts[2].images, undefined, 'images do not leak to subsequent turns');
+		service.stop();
+		service = serviceFor(files, server, store);
+		const state = await service.getState();
+		assert.deepEqual(state.messages[0].images, [{name: TEST_IMAGE.name, mimeType: TEST_IMAGE.mimeType}]);
+		assert.ok(!JSON.stringify([...store.values]).includes(TEST_IMAGE.data));
+	}
+	finally
+	{
+		service.stop();
+		await rm(files.temporary, {recursive: true, force: true});
+	}
+});
+
+test('rejects invalid, oversized and excessive images before starting Pi or changing history', async () =>
+{
+	const files = await fixture();
+	const server = fakePiRpc();
+	const service = serviceFor(files, server);
+	try
+	{
+		for (const images of [
+			{}, Array(5).fill(TEST_IMAGE), [{...TEST_IMAGE, data: 'not-base64'}],
+			[{...TEST_IMAGE, data: Buffer.from('<svg/>').toString('base64')}],
+			[{...TEST_IMAGE, mimeType: 'image/jpeg'}],
+			[{...TEST_IMAGE, mimeType: 'image/svg+xml'}],
+			[{...TEST_IMAGE, data: Buffer.alloc(5 * 1024 * 1024 + 1).toString('base64')}]
+		])
+		{
+			await assert.rejects(service.chat({prompt: '绘制', images, filePath: files.diagram}),
+				error => error.code === 'WORKSPACE_AGENT_INVALID_INPUT');
+		}
+		assert.equal(server.spawnCount, 0);
+		assert.deepEqual((await service.getState()).messages, []);
+		assert.equal(await readFile(files.diagram, 'utf8'), ORIGINAL_DIAGRAM);
 	}
 	finally
 	{
@@ -739,12 +800,16 @@ test('persists requirements steered into the active workspace turn', async () =>
 			context: {scope: 'page', pageId: 'page-1', cells: []}});
 		await ready;
 		await service.steer('再把节点名称改短');
+		await service.steer('', [TEST_IMAGE]);
 		finishTurn();
 		await chat;
 		const state = await service.getState();
-		assert.equal(state.messages.length, 3);
+		assert.equal(state.messages.length, 4);
 		assert.deepEqual(state.messages.map(message => message.text),
-			['先整理布局', '再把节点名称改短', '已按补充要求完成']);
+			['先整理布局', '再把节点名称改短', '请根据附图帮助我绘制或修改当前图纸。', '已按补充要求完成']);
+		assert.deepEqual(server.requests.filter(request => request.type === 'steer')[1].images,
+			[{type: 'image', data: TEST_IMAGE.data, mimeType: TEST_IMAGE.mimeType}]);
+		assert.deepEqual(state.messages[2].images, [{name: TEST_IMAGE.name, mimeType: TEST_IMAGE.mimeType}]);
 		assert.equal(state.messages[1].steered, true);
 		assert.ok(server.requests.some(request => request.type === 'steer' &&
 			request.message === '再把节点名称改短'));
@@ -874,7 +939,7 @@ test('editor Agent panel uses the file-safe direct editing lifecycle', async () 
 	assert.match(pluginSource, /workspaceAgentSetProfile/);
 	assert.match(pluginSource, /agentInput\.disabled = agentLoading/);
 	assert.match(pluginSource, /agentInput\.focus\(\)/);
-	assert.match(pluginSource, /agentState\.sessionId \? '继续当前对话'/);
+	assert.match(pluginSource, /agentState\.sessionId \? '继续对话，可粘贴图片'/);
 	assert.match(pluginSource, /'当前对话 · '/);
 	assert.match(pluginSource, /配置 Agent 模型/);
 	assert.match(pluginSource, /workspaceAgentApprove/);

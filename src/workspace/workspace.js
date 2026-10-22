@@ -140,6 +140,28 @@ function previewApi()
 			recalculate();
 			return {state: structuredClone(state), movedRelativePath: item.relativePath};
 		},
+		moveDirectory: async (relativePath, destinationRelativePath) =>
+		{
+			if (!relativePath || destinationRelativePath === relativePath || destinationRelativePath.startsWith(`${relativePath}/`))
+				throw new Error('不能将目录移入自身或其子目录');
+			const source = findParent(relativePath);
+			const index = source.nodes.findIndex(node => node.name === source.name && node.type === 'directory');
+			const target = childrenAt(destinationRelativePath);
+			if (index < 0 || !target) throw new Error('目录已经不存在');
+			if (target === source.nodes) throw new Error('目录已经在所选位置中');
+			if (target.some(node => node.name === source.name)) throw new Error('目标目录中已有同名文件或目录');
+			const [item] = source.nodes.splice(index, 1);
+			const movedRelativePath = [destinationRelativePath, item.name].filter(Boolean).join('/');
+			function update(node)
+			{
+				node.relativePath = movedRelativePath + node.relativePath.slice(relativePath.length);
+				(node.children || []).forEach(update);
+			}
+			update(item);
+			target.push(item);
+			recalculate();
+			return {state: structuredClone(state), movedRelativePath};
+		},
 		copyFile: async (relativePath, destinationRelativePath) =>
 		{
 			const source = findParent(relativePath);
@@ -380,7 +402,7 @@ function clearDragFeedback()
 		target.classList.remove('is-drop-target');
 	}
 
-	for (const source of elements.fileList.querySelectorAll('.is-dragging'))
+	for (const source of document.querySelectorAll('.is-dragging'))
 	{
 		source.classList.remove('is-dragging');
 	}
@@ -388,11 +410,50 @@ function clearDragFeedback()
 
 function canDropFile(destinationRelativePath)
 {
-	return draggedRelativePath != null && parentDirectory(draggedRelativePath) !== destinationRelativePath;
+	const item = draggedRelativePath != null ? findNode(draggedRelativePath) : null;
+	return item != null && canMoveTo(item, destinationRelativePath);
+}
+
+function canMoveTo(item, destinationRelativePath)
+{
+	return parentDirectory(item.relativePath) !== destinationRelativePath &&
+		(item.type !== 'directory' || (destinationRelativePath !== item.relativePath &&
+			!destinationRelativePath.startsWith(`${item.relativePath}/`)));
+}
+
+function moveItem(item, destinationRelativePath)
+{
+	return item.type === 'directory' ? api.moveDirectory(item.relativePath, destinationRelativePath, workspaceState.root) :
+		api.moveFile(item.relativePath, destinationRelativePath, workspaceState.root);
+}
+
+function updateMovedDirectory(oldPath, nextPath)
+{
+	if (currentDirectory === oldPath || currentDirectory.startsWith(`${oldPath}/`))
+		currentDirectory = nextPath + currentDirectory.slice(oldPath.length);
+}
+
+function addDragSource(target, item)
+{
+	target.draggable = true;
+	target.addEventListener('dragstart', event =>
+	{
+		event.stopPropagation();
+		draggedRelativePath = item.relativePath;
+		event.dataTransfer.effectAllowed = 'move';
+		event.dataTransfer.setData('application/x-draw-ai-workspace-file', item.relativePath);
+		requestAnimationFrame(() => target.classList.add('is-dragging'));
+	});
+	target.addEventListener('dragend', () =>
+	{
+		draggedRelativePath = null;
+		clearDragFeedback();
+	});
 }
 
 function setDropTarget(event, destinationRelativePath, target)
 {
+	if (draggedRelativePath != null) event.stopPropagation();
 	if (!canDropFile(destinationRelativePath))
 	{
 		event.dataTransfer.dropEffect = 'none';
@@ -413,12 +474,15 @@ async function dropFile(event, destinationRelativePath, target)
 	if (!setDropTarget(event, destinationRelativePath, target)) return;
 
 	const relativePath = draggedRelativePath;
+	const item = findNode(relativePath);
 	draggedRelativePath = null;
 	clearDragFeedback();
 
-	const result = await runAction(() => api.moveFile(relativePath, destinationRelativePath), '文件已移动');
+	const result = await runAction(() => moveItem(item, destinationRelativePath),
+		item.type === 'directory' ? '目录已移动' : '文件已移动');
 	if (result)
 	{
+		if (item.type === 'directory') updateMovedDirectory(relativePath, result.movedRelativePath);
 		workspaceState = result.state;
 		render();
 	}
@@ -502,6 +566,7 @@ function createTreeRow(node, depth)
 	label.textContent = node.name;
 	button.appendChild(label);
 	button.addEventListener('click', () => selectDirectory(node.relativePath));
+	if (node.relativePath) addDragSource(button, node);
 	button.addEventListener('dragover', (event) =>
 	{
 		setDropTarget(event, node.relativePath, button);
@@ -578,27 +643,15 @@ function createFileRow(node)
 	row.className = 'file-row';
 	row.dataset.path = node.relativePath;
 	row.setAttribute('data-testid', `file-row-${node.relativePath}`);
+	addDragSource(row, node);
 
 	if (node.type === 'file')
 	{
-		row.draggable = true;
 		row.title = '拖到目录移动图纸';
-		row.addEventListener('dragstart', (event) =>
-		{
-			draggedRelativePath = node.relativePath;
-			event.dataTransfer.effectAllowed = 'move';
-			event.dataTransfer.setData('application/x-draw-ai-workspace-file', node.relativePath);
-			requestAnimationFrame(() => row.classList.add('is-dragging'));
-		});
-		row.addEventListener('dragend', () =>
-		{
-			draggedRelativePath = null;
-			clearDragFeedback();
-		});
 	}
 	else if (node.type === 'directory')
 	{
-		row.title = '拖入此目录移动图纸';
+		row.title = '可拖动此目录，也可拖入图纸或目录';
 		row.addEventListener('dragover', (event) =>
 		{
 			setDropTarget(event, node.relativePath, row);
@@ -652,9 +705,9 @@ function createFileRow(node)
 	const actionsCell = document.createElement('td');
 	const actions = document.createElement('div');
 	actions.className = 'row-actions';
+	actions.appendChild(actionButton('move', `移动 ${node.name}`, () => openTransferDialog('move', node)));
 	if (node.type === 'file')
 	{
-		actions.appendChild(actionButton('move', `移动 ${node.name}`, () => openTransferDialog('move', node)));
 		actions.appendChild(actionButton('copy', `复制 ${node.name}`, () => openTransferDialog('copy', node)));
 	}
 	actions.appendChild(actionButton('pencil', `重命名 ${node.name}`, () => openNameDialog('rename', node)));
@@ -839,7 +892,7 @@ function openTransferDialog(mode, item)
 {
 	transferMode = mode;
 	activeItem = item;
-	elements.transferDialogTitle.textContent = mode === 'move' ? '移动图文件' : '复制图文件';
+	elements.transferDialogTitle.textContent = mode === 'move' ? (item.type === 'directory' ? '移动目录' : '移动图文件') : '复制图文件';
 	elements.transferFileName.textContent = item.name;
 	elements.transferSubmit.textContent = mode === 'move' ? '移动' : '复制';
 	elements.transferError.textContent = '';
@@ -849,7 +902,7 @@ function openTransferDialog(mode, item)
 		const option = document.createElement('option');
 		option.value = directory.relativePath;
 		option.textContent = directory.relativePath ? directory.relativePath.split('/').join(' / ') : '全部图纸';
-		option.disabled = mode === 'move' && directory.relativePath === sourceParent;
+		option.disabled = mode === 'move' && !canMoveTo(item, directory.relativePath);
 		return option;
 	});
 	elements.transferDestination.replaceChildren(...options);
@@ -1008,12 +1061,14 @@ elements.transferForm.addEventListener('submit', async (event) =>
 	{
 		const destination = elements.transferDestination.value;
 		const result = transferMode === 'move' ?
-			await api.moveFile(activeItem.relativePath, destination) :
+			await moveItem(activeItem, destination) :
 			await api.copyFile(activeItem.relativePath, destination);
+		if (transferMode === 'move' && activeItem.type === 'directory')
+			updateMovedDirectory(activeItem.relativePath, result.movedRelativePath);
 		workspaceState = result.state;
 		elements.transferDialog.close();
 		render();
-		showToast(transferMode === 'move' ? '文件已移动' : '文件已复制');
+		showToast(transferMode === 'move' ? (activeItem.type === 'directory' ? '目录已移动' : '文件已移动') : '文件已复制');
 	}
 	catch (error)
 	{
@@ -1132,6 +1187,12 @@ if (api == null)
 else
 {
 	refreshState(true);
+	api.onMoved?.(move =>
+	{
+		if (move.root !== workspaceState?.root) return;
+		updateMovedDirectory(move.oldRelativePath, move.movedRelativePath);
+		refreshState(true);
+	});
 	api.onChanged(() =>
 	{
 		if (refreshTimer != null) clearTimeout(refreshTimer);

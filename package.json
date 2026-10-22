@@ -1,8 +1,8 @@
 {
   "name": "draw.ai",
   "productName": "draw.ai",
-  "version": "0.1.7",
-  "description": "Open-source AI diagram workspace based on draw.io",
+  "version": "0.1.8",
+  "description": "AI diagram workspace: reference images, natural-language editing and recoverable .drawio changes",
   "exports": "./src/main/electron.js",
   "type": "module",
   "main": "src/main/electron.js",
@@ -17,6 +17,7 @@
     "test:agent-renderer": "electron src/test/workspace-agent-renderer.electron.js",
     "test:search-renderer": "electron src/test/workspace-search-renderer.electron.js",
     "test:theme-renderer": "electron src/test/workspace-theme-renderer.electron.js",
+    "test:directory-renderer": "electron src/test/workspace-directory-renderer.electron.js",
     "test:problem-tree-renderer": "electron src/test/editor-problem-tree-renderer.electron.js",
     "generate-icons": "node build/generate-icons.mjs",
     "release-win": "electron-builder --config electron-builder-win.json --publish always",

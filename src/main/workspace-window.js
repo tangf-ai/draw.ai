@@ -16,6 +16,7 @@ import {
 	removeWorkspaceTemplateSource,
 	renameWorkspaceItem,
 	moveWorkspaceFile,
+	moveWorkspaceDirectory,
 	updateWorkspaceTemplateFromSource,
 	validateWorkspaceName,
 	WORKSPACE_FILE_EXTENSIONS
@@ -106,7 +107,7 @@ export function createWorkspaceController(dependencies)
 		}
 	}
 
-	function notifyChanged()
+	function notifyChanged(channel = 'workspace:changed', data)
 	{
 		const windows = typeof BrowserWindow.getAllWindows === 'function' ?
 			BrowserWindow.getAllWindows() : (workspaceWindow != null ? [workspaceWindow] : []);
@@ -115,7 +116,7 @@ export function createWorkspaceController(dependencies)
 		{
 			if (window != null && !window.isDestroyed())
 			{
-				window.webContents.send('workspace:changed');
+				window.webContents.send(channel, data);
 			}
 		}
 	}
@@ -259,6 +260,18 @@ export function createWorkspaceController(dependencies)
 		return {state: await getState(), movedRelativePath: movedRelativePath, absolutePath: item.absolutePath};
 	});
 
+	handle('workspace:move-directory', async (event, relativePath, destinationRelativePath, expectedRoot) =>
+	{
+		const root = getActionRoot(expectedRoot);
+		const source = await getWorkspaceItem(root, relativePath);
+		const movedRelativePath = await moveWorkspaceDirectory(root, relativePath, destinationRelativePath);
+		const {absolutePath} = await getWorkspaceItem(root, movedRelativePath);
+		const moved = {root, oldRelativePath: source.relativePath, movedRelativePath,
+			oldAbsolutePath: source.absolutePath, absolutePath};
+		notifyChanged('workspace:moved', moved);
+		return {...moved, state: await getState()};
+	});
+
 	// Editor-side actions accept visible diagram files only. The manager retains
 	// its separate directory operations; both entry points share sender validation.
 	handle('workspace:rename-file', async (event, relativePath, name, expectedRoot) =>
@@ -310,9 +323,9 @@ export function createWorkspaceController(dependencies)
 		return true;
 	});
 
-	handle('workspace:resolve-item', async (event, relativePath) =>
+	handle('workspace:resolve-item', async (event, relativePath, expectedRoot) =>
 	{
-		const root = store?.get(WORKSPACE_ROOT_KEY);
+		const root = getActionRoot(expectedRoot);
 		const item = await getWorkspaceItem(root, relativePath);
 
 		if (item.type !== 'file' || !WORKSPACE_FILE_EXTENSIONS.has(path.extname(item.absolutePath).toLowerCase()))

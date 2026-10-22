@@ -12,6 +12,8 @@ const PI_SESSION_DIRECTORY = 'pi-sessions';
 const CHECKPOINT_RESULT_FILE = 'result.json';
 const MAX_MESSAGES = 100;
 const MAX_PROMPT_LENGTH = 30000;
+const MAX_IMAGES = 4;
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_CONTEXT_LENGTH = 300000;
 const MAX_DRAWIO_FILES = 1000;
 const MAX_DRAWIO_FILE_BYTES = 64 * 1024 * 1024;
@@ -160,6 +162,59 @@ function cleanText(value, label, maxLength)
 	}
 
 	return result;
+}
+
+function normalizeImages(value)
+{
+	if (value == null) return [];
+	if (!Array.isArray(value) || value.length > MAX_IMAGES)
+	{
+		throw agentError('每条消息最多添加 4 张图片', 'WORKSPACE_AGENT_INVALID_INPUT');
+	}
+
+	return value.map((image, index) =>
+	{
+		const data = image?.data;
+		const mimeType = image?.mimeType;
+		if (typeof data !== 'string' || !data.length ||
+			data.length > Math.ceil(MAX_IMAGE_BYTES / 3) * 4 ||
+			data.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(data))
+		{
+			throw agentError('图片无效或超过 5 MB', 'WORKSPACE_AGENT_INVALID_INPUT');
+		}
+		const bytes = Buffer.from(data, 'base64');
+		const matches = {
+			'image/png': bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])),
+			'image/jpeg': bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255,
+			'image/gif': ['GIF87a', 'GIF89a'].includes(bytes.toString('ascii', 0, 6)),
+			'image/webp': bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP'
+		};
+		if (bytes.length > MAX_IMAGE_BYTES || matches[mimeType] !== true ||
+			bytes.toString('base64') !== data)
+		{
+			throw agentError('请添加有效的 PNG、JPEG、WebP 或 GIF 图片（每张不超过 5 MB）',
+				'WORKSPACE_AGENT_INVALID_INPUT');
+		}
+		return {type: 'image', data, mimeType,
+			name: typeof image.name === 'string' ? image.name.slice(0, 200) : `图片 ${index + 1}`};
+	});
+}
+
+function imageMetadata(images)
+{
+	// Pi persists the actual image content in its session; keep the UI store small.
+	return images.map(({name, mimeType}) => ({name, mimeType}));
+}
+
+function rpcImages(images)
+{
+	return images.length ? {images: images.map(({type, data, mimeType}) => ({type, data, mimeType}))} : {};
+}
+
+function imagePrompt(text, images, maxLength)
+{
+	return cleanText(images.length && (text == null || typeof text === 'string' && !text.trim()) ?
+		'请根据附图帮助我绘制或修改当前图纸。' : text, '问题', maxLength);
 }
 
 function normalizeRelativePath(value)
@@ -1203,7 +1258,8 @@ export function createWorkspaceAgentService({
 			}
 
 			input = input != null && typeof input === 'object' ? input : {};
-			const prompt = cleanText(input.prompt, '问题', MAX_PROMPT_LENGTH);
+			const images = normalizeImages(input.images);
+			const prompt = imagePrompt(input.prompt, images, MAX_PROMPT_LENGTH);
 			const root = await resolveWorkspaceRoot(getWorkspaceRoot);
 			const filePath = await resolveDiagramPath(root, input.filePath);
 			const relativeFilePath = normalizeRelativePath(path.relative(root, filePath));
@@ -1216,7 +1272,8 @@ export function createWorkspaceAgentService({
 
 			onProgress?.({type: 'status', phase: 'checkpoint', label: '正在建立安全检查点'});
 			checkpoint = await createCheckpoint(root, stateDir, await readKnownHashes(session));
-			appendMessage(store, session, {role: 'user', text: prompt, filePath: relativeFilePath});
+			appendMessage(store, session, {role: 'user', text: prompt, filePath: relativeFilePath,
+				...(images.length ? {images: imageMetadata(images)} : {})});
 
 			try
 			{
@@ -1253,7 +1310,8 @@ export function createWorkspaceAgentService({
 				try
 				{
 					await client.request('prompt', {
-						message: buildTurnPrompt(prompt, relativeFilePath, input.context)
+						message: buildTurnPrompt(prompt, relativeFilePath, input.context),
+						...rpcImages(images)
 					});
 					await turnPromise;
 				}
@@ -1377,17 +1435,19 @@ export function createWorkspaceAgentService({
 			return true;
 		},
 
-		async steer(text)
+		async steer(text, imageInput)
 		{
 			if (active == null)
 			{
 				throw agentError('当前没有正在执行的 Agent 任务', 'WORKSPACE_AGENT_NOT_BUSY');
 			}
 
-			const prompt = cleanText(text, '补充要求', 10000);
-			await client.request('steer', {message: prompt});
+			const images = normalizeImages(imageInput);
+			const prompt = imagePrompt(text, images, 10000);
+			await client.request('steer', {message: prompt, ...rpcImages(images)});
 			appendMessage(store, active.session, {role: 'user', text: prompt,
-				filePath: active.relativeFilePath, steered: true});
+				filePath: active.relativeFilePath, steered: true,
+				...(images.length ? {images: imageMetadata(images)} : {})});
 			progress('steered', {text: prompt});
 			return true;
 		},

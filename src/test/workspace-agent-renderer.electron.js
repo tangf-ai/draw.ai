@@ -63,14 +63,20 @@ async function runRendererChecks()
 			window.clearInterval = id => agentTimers.delete(id);
 			window.agentTestState = {configured: true, busy: false, messages: [], command: 'pi'};
 			window.agentRequests = [];
+			window.agentPayloads = [];
 			window.electron = {request(message, resolve, reject, progress) {
 				agentRequests.push(message.action);
+				agentPayloads.push(message);
 				if (message.action === 'workspaceAgentChat') {
 					window.agentProgress = progress;
+					window.agentFail = () => reject('测试请求失败');
 					window.agentFinish = () => {
 						agentTestState.messages = [{role: 'user', text: '整理图纸'}, {role: 'assistant', text: '已完成'}];
 						resolve({});
 					};
+				} else if (message.action === 'workspaceAgentSteer' && window.failNextSteer) {
+					window.failNextSteer = false;
+					reject('补充要求发送失败');
 				} else resolve(agentTestState);
 			}};
 			const diagram = document.createElement('div');
@@ -206,11 +212,115 @@ async function runRendererChecks()
 		assert.equal(await checkCompanion(`
 			document.querySelector('[aria-label="新建独立对话（清空当前上下文）"]').click();
 			await flush();
-			const reset = visible() && agentTimers.size === 1;
+			return visible() && agentTimers.size === 1;
+		`), true, 'new conversations restore the companion');
+
+		await checkCompanion(`
+			window.testImageData = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=';
+			window.makeImageFile = (name = '参考图.png') => new File([
+				Uint8Array.from(atob(testImageData), char => char.charCodeAt(0))
+			], name, {type: 'image/png'});
+			window.waitForImages = async () => {
+				const deadline = Date.now() + 3000;
+				while (document.querySelector('.geAgentAttachments').getAttribute('aria-busy') === 'true' && Date.now() < deadline) {
+					await new Promise(resolve => setTimeout(resolve, 10));
+				}
+				await flush();
+			};
+			window.pasteImage = async (file = makeImageFile()) => {
+				const clipboardData = new DataTransfer();
+				clipboardData.items.add(file);
+				const event = new ClipboardEvent('paste', {clipboardData, bubbles: true, cancelable: true});
+				document.querySelector('.geAgentInput').dispatchEvent(event);
+				await waitForImages();
+				return event.defaultPrevented;
+			};
+		`);
+		assert.equal(await checkCompanion(`
+			window.canvasPasteCount = 0;
+			document.addEventListener('paste', () => canvasPasteCount++);
+			const prevented = await pasteImage();
+			const preview = document.querySelector('.geAgentAttachment img');
+			return prevented && canvasPasteCount === 0 && preview.complete && preview.naturalWidth === 1 &&
+				preview.src.endsWith(testImageData);
+		`), true, 'clipboard images preview in the composer without reaching the canvas');
+		await captureCompanion('assistant-image-attachment');
+		assert.equal(await checkCompanion(`
+			document.querySelector('.geAgentAttachmentRemove').click();
+			const clipboardData = new DataTransfer();
+			clipboardData.setData('text/plain', '普通文本');
+			const event = new ClipboardEvent('paste', {clipboardData, bubbles: true, cancelable: true});
+			document.querySelector('.geAgentInput').dispatchEvent(event);
+			return !event.defaultPrevented && canvasPasteCount === 0 &&
+				document.querySelectorAll('.geAgentAttachment').length === 0;
+		`), true, 'removing attachments and ordinary text paste keep their expected behavior');
+		assert.equal(await checkCompanion(`
+			const picker = document.querySelector('input[type="file"]');
+			const files = new DataTransfer();
+			files.items.add(makeImageFile('选择的图片.png'));
+			picker.files = files.files;
+			picker.dispatchEvent(new Event('change'));
+			await waitForImages();
+			return picker.value === '' && document.querySelector('.geAgentAttachmentName').textContent === '选择的图片.png';
+		`), true, 'file selection adds an image and allows selecting the same file again');
+		assert.equal(await checkCompanion(`
+			await pasteImage(new File(['<svg/>'], '不支持.svg', {type: 'image/svg+xml'}));
+			const unsupported = document.querySelector('.geAgentImageError').textContent.includes('支持');
+			await pasteImage(new File([new Uint8Array(5 * 1024 * 1024 + 1)], '过大.png', {type: 'image/png'}));
+			const oversized = document.querySelector('.geAgentImageError').textContent.includes('5 MB');
+			await pasteImage(new File(['broken'], '损坏.png', {type: 'image/png'}));
+			const corrupt = document.querySelector('.geAgentImageError').textContent.includes('有效图片');
+			for (let index = 0; index < 4; index++) await pasteImage();
+			return unsupported && oversized && corrupt && document.querySelectorAll('.geAgentAttachment').length === 4 &&
+				document.querySelector('.geAgentImageError').textContent.includes('最多添加 4');
+		`), true, 'unsupported, oversized, corrupt and excessive images show an actionable error');
+		assert.equal(await checkCompanion(`
+			document.querySelector('.geAgentSend').click();
+			await flush(); await flush();
+			const request = agentPayloads.filter(message => message.action === 'workspaceAgentChat').at(-1);
+			const sent = request.input.images.length === 4 && request.input.images[0].data === testImageData &&
+				request.input.prompt.includes('请根据附图') && document.querySelectorAll('.geAgentAttachment').length === 0;
+			await pasteImage(makeImageFile('补充图.png'));
+			document.querySelector('.geAgentInput').dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true, cancelable: true}));
+			await flush();
+			const steer = agentPayloads.filter(message => message.action === 'workspaceAgentSteer').at(-1);
+			const steered = steer.images.length === 1 && steer.images[0].name === '补充图.png';
+			window.failNextSteer = true;
+			await pasteImage(makeImageFile('重试图.png'));
+			document.querySelector('.geAgentInput').dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true, cancelable: true}));
+			await flush(); await flush();
+			const restored = document.querySelector('.geAgentAttachmentName').textContent === '重试图.png';
+			agentFinish();
+			await flush(); await flush();
+			return sent && steered && restored;
+		`), true, 'image-only prompts and steering carry bytes; failed steering restores attachments');
+		assert.equal(await checkCompanion(`
+			document.querySelector('.geAgentInput').value = '请重绘';
+			document.querySelector('.geAgentSend').click();
+			await flush(); await flush();
+			agentFail();
+			await flush(); await flush();
+			return document.querySelector('.geAgentInput').value === '请重绘' &&
+				document.querySelector('.geAgentAttachmentName').textContent === '重试图.png';
+		`), true, 'failed chat restores the text and image draft for retry');
+		assert.equal(await checkCompanion(`
+			document.querySelector('[aria-label="新建独立对话（清空当前上下文）"]').click();
+			await flush();
+			const cleared = !document.querySelector('.geAgentAttachment') && !document.querySelector('.geAgentInput').value;
+			document.querySelector('.geAgentInput').value = '只有文本';
+			document.querySelector('.geAgentSend').click();
+			await flush(); await flush();
+			const request = agentPayloads.filter(message => message.action === 'workspaceAgentChat').at(-1);
+			agentFinish();
+			await flush(); await flush();
+			return cleared && request.input.images.length === 0;
+		`), true, 'new conversations clear attachments and text-only messages do not reuse images');
+		assert.equal(await checkCompanion(`
 			agentTestUi.destroyFunctions.forEach(destroy => destroy());
-			return reset && agentTimers.size === 0 && !document.querySelector('.geAgentView');
-		`), true, 'new conversations restore the companion and teardown clears timers');
+			return agentTimers.size === 0 && !document.querySelector('.geAgentView');
+		`), true, 'teardown clears timers and removes the panel');
 		console.log('Agent companion: empty, rotation, close, background, reduced motion, progress, approval, streaming, completion and teardown passed');
+		console.log('Agent images: clipboard, file picker, preview, removal, limits, image-only sending, steering, retry and conversation isolation passed');
 	}
 	catch (error)
 	{

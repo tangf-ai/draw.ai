@@ -35,10 +35,14 @@ jobs:
         run: npm run lint
       - name: Run tests
         run: npm test
+      - name: Check AI assistant interactions and image input
+        run: npm run test:agent-renderer
       - name: Check problem-tree editor interactions
         run: npm run test:problem-tree-renderer
       - name: Check workspace theme
         run: npm run test:theme-renderer
+      - name: Check workspace directory moves
+        run: npm run test:directory-renderer
       - name: Check patches
         run: |
           git diff --check

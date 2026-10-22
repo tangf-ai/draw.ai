@@ -22,7 +22,8 @@ contextBridge.exposeInMainWorld('workspaceAPI', {
 	createDirectory: (parentRelativePath, name) => invoke('workspace:create-directory', parentRelativePath, name),
 	createDiagram: (parentRelativePath, name) => invoke('workspace:create-diagram', parentRelativePath, name),
 	renameItem: (relativePath, name) => invoke('workspace:rename-item', relativePath, name),
-	moveFile: (relativePath, destinationRelativePath) => invoke('workspace:move-file', relativePath, destinationRelativePath),
+	moveFile: (relativePath, destinationRelativePath, expectedRoot) => invoke('workspace:move-file', relativePath, destinationRelativePath, expectedRoot),
+	moveDirectory: (relativePath, destinationRelativePath, expectedRoot) => invoke('workspace:move-directory', relativePath, destinationRelativePath, expectedRoot),
 	copyFile: (relativePath, destinationRelativePath) => invoke('workspace:copy-file', relativePath, destinationRelativePath),
 	trashItem: (relativePath) => invoke('workspace:trash-item', relativePath),
 	openItem: (relativePath) => invoke('workspace:open-item', relativePath),
@@ -32,6 +33,12 @@ contextBridge.exposeInMainWorld('workspaceAPI', {
 	importTemplate: () => invoke('workspace:import-template'),
 	updateTemplate: (force = false) => invoke('workspace:update-template', force === true),
 	removeTemplate: () => invoke('workspace:remove-template'),
+	onMoved: callback =>
+	{
+		const listener = (event, move) => callback(move);
+		ipcRenderer.on('workspace:moved', listener);
+		return () => ipcRenderer.removeListener('workspace:moved', listener);
+	},
 	onChanged: (callback) =>
 	{
 		const listener = () => callback();

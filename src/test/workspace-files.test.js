@@ -16,6 +16,7 @@ import {
 	readWorkspace,
 	renameWorkspaceItem,
 	moveWorkspaceFile,
+	moveWorkspaceDirectory,
 	updateWorkspaceTemplateFromSource,
 	validateWorkspaceName
 } from '../main/workspace-files.js';
@@ -282,5 +283,51 @@ describe('workspace file operations', () =>
 	{
 		const root = await createTempWorkspace(t);
 		await assert.rejects(getWorkspaceItem(root, ''), /根目录/);
+	});
+});
+
+describe('workspace directory moves', () =>
+{
+	test('moves the entire subtree, including empty folders and non-diagram content, and can move back to root', async t =>
+	{
+		const root = await createTempWorkspace(t);
+		await fs.mkdir(path.join(root, '公司/部门/空目录'), {recursive: true});
+		await fs.mkdir(path.join(root, '归档'));
+		const contents = Buffer.from([0, 1, 255, 80]);
+		await fs.writeFile(path.join(root, '公司/部门/图.drawio'), contents);
+		await fs.writeFile(path.join(root, '公司/.settings'), 'hidden settings');
+		await fs.writeFile(path.join(root, '公司/说明.txt'), 'unchanged');
+		assert.equal(await moveWorkspaceDirectory(root, '公司', '归档'), '归档/公司');
+		await assert.rejects(fs.access(path.join(root, '公司')));
+		assert.deepEqual(await fs.readFile(path.join(root, '归档/公司/部门/图.drawio')), contents);
+		assert.equal(await fs.readFile(path.join(root, '归档/公司/.settings'), 'utf8'), 'hidden settings');
+		assert.equal(await fs.readFile(path.join(root, '归档/公司/说明.txt'), 'utf8'), 'unchanged');
+		assert.ok((await fs.stat(path.join(root, '归档/公司/部门/空目录'))).isDirectory());
+		assert.equal(await moveWorkspaceDirectory(root, '归档/公司', ''), '公司');
+	});
+
+	test('rejects self, descendants, root, hidden paths, aliases and collisions without altering content', async t =>
+	{
+		const root = await createTempWorkspace(t);
+		await fs.mkdir(path.join(root, '公司/部门'), {recursive: true});
+		await fs.mkdir(path.join(root, '归档/公司'), {recursive: true});
+		await fs.mkdir(path.join(root, '.internal'));
+		await fs.writeFile(path.join(root, '公司/图.drawio'), 'original');
+		await fs.symlink(path.join(root, '公司'), path.join(root, '源链接'));
+		await fs.symlink(path.join(root, '归档'), path.join(root, '目标链接'));
+		for (const [source, destination] of [
+			['公司', '公司'], ['公司', '公司/部门'], ['公司', ''], ['', '归档'],
+			['公司', '.internal'], ['.internal', '归档'], ['公司', '归档'],
+			['源链接', '归档'], ['公司', '目标链接'], ['公司', '../'],
+			['公司/../公司', '归档'], ['公司/图.drawio', '归档']
+		])
+		{
+			await assert.rejects(moveWorkspaceDirectory(root, source, destination), `${source} -> ${destination}`);
+			assert.equal(await fs.readFile(path.join(root, '公司/图.drawio'), 'utf8'), 'original');
+		}
+		await fs.rmdir(path.join(root, '归档/公司'));
+		await fs.symlink(path.join(root, '不存在'), path.join(root, '归档/公司'));
+		await assert.rejects(moveWorkspaceDirectory(root, '公司', '归档'), {code: 'ALREADY_EXISTS'});
+		assert.ok((await fs.lstat(path.join(root, '归档/公司'))).isSymbolicLink());
 	});
 });

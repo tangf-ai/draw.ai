@@ -5,7 +5,7 @@
 <h1 align="center">draw.ai</h1>
 
 <p align="center">
-  A local-first desktop workspace for creating and managing diagrams with AI.
+  Turn prompts and reference images into editable diagrams with an AI assistant.
 </p>
 
 <p align="center">
@@ -17,19 +17,25 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="Apache License 2.0"></a>
 </p>
 
-draw.ai brings a unified file workspace, reusable templates, a Pi-powered diagram Agent, and the mature draw.io editor into one open-source desktop application. Diagrams remain standard, editable `.drawio` files.
+**An AI workspace that edits your diagrams, not just talks about them.** Describe a change, attach a reference image, or select a few shapes for a focused edit. The Pi-powered assistant works directly on standard `.drawio` files: keep editing by hand, iterate in conversation, inspect changed files, or roll back the latest AI change.
+
+The local-first workspace, templates, and mature draw.io editor work independently of AI. AI requests use your locally installed Pi and configured model.
 
 > draw.ai is an independent community project based on the Apache-2.0-licensed draw.io projects. It is not affiliated with, endorsed by, or supported by draw.io Ltd or JGraph. draw.io is a trademark of its respective owner.
 
 <p align="center">
-  <img src="docs/images/editor-workspace.png" width="100%" alt="draw.ai editor with the unified workspace and a sample architecture diagram">
+  <img src="docs/images/ai-image-input.png" width="100%" alt="draw.ai AI assistant with reference image input, editing instructions and an editable diagram">
 </p>
 
-<p align="center"><sub>Manage diagram files and use the full draw.io editor in one desktop window.</sub></p>
+<p align="center"><sub>Reference images and prompts beside the real editor. Staged demo conversation/layout; no model was called.</sub></p>
 
 ## Features
 
+- **AI image input (new in v0.1.8)**: paste or select reference images, preview/remove them, and send with or without text. Add images to an active task as follow-up instructions. Up to four PNG/JPEG/WebP/GIF images per message, 5 MiB each; image understanding depends on the selected Pi model.
+- **Natural-language diagram editing**: ask the assistant to draft or refine flows and styles directly in editable diagram files, rather than producing a flattened image.
+
 - **Unified workspace**: create folders and diagrams, search, import, rename, duplicate, move, reveal, and move files to the system trash from one window.
+- **Directory moves**: drag folders in the workspace tree/list or choose a destination with Move; opened diagrams follow the new path.
 - **Reusable diagram template**: configure the content used for every new diagram.
 - **Synchronized template source**: track a template in iCloud Drive or another synchronized folder, detect newer external versions, and explicitly update the local hidden working copy.
 - **Workspace Agent**: use a Pi-powered conversation beside the editor. The Agent reads and edits the workspace's `.drawio` files directly, validates the resulting XML, and reloads the active diagram.
@@ -40,19 +46,31 @@ draw.ai brings a unified file workspace, reusable templates, a Pi-powered diagra
 
 ## Interface preview
 
-All screenshots use fictional demo data and contain no real workspace, account, conversation, or business information.
+The new AI screenshots render the real editor and assistant with isolated fictional data. Conversations and diagram layouts are staged; no Pi/model request is made. They illustrate the UI, not measured model quality or latency, and contain no real accounts or business data.
+
+### Reference images + instructions
+
+Paste an image or use the attachment button, preview it, and add your request. This screenshot shows an unsent draft; image understanding requires a vision-capable model configured in Pi.
+
+![draw.ai AI reference image input](docs/images/ai-image-input.png)
+
+### Conversation + editable output
+
+Request changes beside the canvas, inspect changed files, and keep iterating. The result remains a standard, editable `.drawio` file.
+
+![draw.ai AI conversation and changed files](docs/images/ai-conversation.png)
+
+### Selection scope + rollback
+
+Selected shapes take precedence over Page scope. Pre-run checkpoints and XML validation support recovery and rollback; they are not an OS sandbox.
+
+![draw.ai AI selection scope and rollback controls](docs/images/ai-selection-scope.png)
 
 ### Unified workspace
 
-Create and organize folders, standard `.drawio` files, and the default template without searching across separate locations.
+Organize folders, diagrams, and templates locally, including folder drag-and-drop moves. Workspace interface example:
 
 ![draw.ai unified diagram workspace](docs/images/workspace-overview.png)
-
-### Workspace Agent
-
-Submit editing requests beside the diagram, target a Page or selection, review changed files, and roll back the latest change when needed.
-
-![draw.ai Workspace Agent](docs/images/workspace-agent.png)
 
 ## Quick start
 
@@ -83,15 +101,15 @@ The Workspace Agent requires the local Pi CLI (`pi`) to be installed and authent
 Pi is required only for Agent requests; the workspace, templates, and diagram editor continue to work locally without it.
 
 1. Select a diagram workspace and open a `.drawio` file from the left sidebar.
-2. Open the **Agent** tab in the right sidebar.
+2. Click **✦ AI 助手** (AI assistant) in the lower-right corner.
 3. Select shapes to restrict the change to those shapes, or choose the current, all, or specific Page scope. When shapes are selected, selection scope takes precedence and the Page selector is disabled.
-4. Enter a request. While Pi is working, additional messages are added to the same active task.
+4. Enter a request, paste reference images, or select images with the attachment button; image-only messages are supported. While Pi is working, additional text/images are added to the same active task.
 5. Answer any extension confirmation or selection dialog shown in the Agent panel before the run continues. The active diagram reloads after a successful edit.
 6. Use the rollback button to restore the diagrams captured before the latest successful Agent run. Rollback is refused if a changed file has been edited again, preventing newer work from being overwritten.
 
 Conversations are retained per workspace. The Agent can edit multiple Pages in the selected scope. It edits another diagram file only when the request explicitly names that file. Invalid draw.io XML is rejected and automatically restored from the pre-run checkpoint.
 
-The current release intentionally provides one Agent surface beside **Format**. The former **Quick Edit** workflow, in-app provider/API-key settings, image attachment flow, and correction-memory UI are not part of this architecture. Authentication and model/provider configuration are handled by the user's Pi installation, or by the **Pi command** and **model** fields in the Agent settings dialog.
+The assistant has one floating panel in the lower-right corner. The former **Quick Edit**, in-app provider/API-key settings, and correction-memory UI are not part of this architecture. Authentication and provider configuration belong to your Pi installation; the assistant settings expose **Pi command** and **model**. Reference images require a compatible vision model. draw.ai does not bundle a model or free inference service.
 
 ## Agent safety model
 
@@ -112,7 +130,9 @@ The editable working template is stored as a hidden file managed by draw.ai. Imp
 
 ## Privacy
 
-Workspace and diagram editing are local by default. The Agent starts the locally installed Pi CLI only after the user submits a request. Pi receives the request, the permitted Page or selection context, and access to `.drawio` files inside the selected workspace; it may use model services according to the user's Pi configuration. Review the applicable data retention and privacy terms before use.
+Workspace and diagram editing are local by default. The Agent starts the locally installed Pi CLI only after the user submits a request. Pi receives the request, submitted reference images, the permitted Page or selection context, and access to `.drawio` files inside the selected workspace; it may use model services according to the user's Pi configuration. Review the applicable data retention and privacy terms before use.
+
+Image contents are sent to Pi and may be retained in Pi sessions and sent to the configured model provider. draw.ai's own conversation list retains image names/types, not raw image content.
 
 Agent conversation metadata and recovery checkpoints are stored in draw.ai's local application data, separately from the diagram workspace. They are not synchronized through the workspace's iCloud folder. Checkpoints contain local copies of workspace diagrams so that failed runs and the latest successful change can be restored.
 
