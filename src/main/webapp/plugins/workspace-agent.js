@@ -50,6 +50,11 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 	var agentGraphWasEnabled = null;
 	var agentPreparedPath = null;
 	var agentDisposed = false;
+	var agentImages = [];
+	var agentImageLoading = 0;
+	var agentImageGeneration = 0;
+	var maxAgentImages = 4;
+	var maxAgentImageBytes = 5 * 1024 * 1024;
 	var markdownFrame = null;
 	var quoteTimer = null;
 	var quoteIndex = -1;
@@ -206,6 +211,13 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 		'.geAgentProfileActions{display:flex;justify-content:flex-end;gap:8px;margin-top:2px}',
 		'.geAgentComposer{display:flex;flex-direction:column;gap:6px;padding:9px 10px 10px;border-top:1px solid light-dark(#e1e4e8,#3c4043);box-sizing:border-box}',
 		'.geAgentComposerRow{display:flex;align-items:flex-end;gap:7px;min-width:0}',
+		'.geAgentAttachments{display:flex;gap:8px;overflow-x:auto;max-height:90px;padding:2px}',
+		'.geAgentAttachment{position:relative;flex:none;width:68px;min-width:0}',
+		'.geAgentAttachment img{display:block;width:68px;height:52px;object-fit:contain;border:1px solid light-dark(#dce1e8,#454950);border-radius:6px;box-sizing:border-box;background:light-dark(#f8f9fa,#292a2e)}',
+		'.geAgentAttachmentName{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;color:light-dark(#70757a,#bdc1c6)}',
+		'.geAgentAttachmentRemove{position:absolute;right:-2px;top:-2px;width:18px;height:18px;border:0;border-radius:50%;background:light-dark(#e8eaed,#5f6368);color:inherit;cursor:pointer;line-height:16px;padding:0}',
+		'.geAgentImageError{color:light-dark(#b3261e,#f28b82);font-size:11px}',
+		'.geAgentAttach{flex:none;font-size:19px}',
 		'.geAgentInput{min-width:0;flex:1;resize:none;box-sizing:border-box;min-height:62px;max-height:150px;border:1px solid light-dark(#c8ccd2,#5f6368);border-radius:6px;background:light-dark(#fff,#292a2e);color:inherit;padding:8px;font:13px/1.45 Arial,sans-serif;letter-spacing:0;outline:none}',
 		'.geAgentInput:focus{border-color:#1a73e8;box-shadow:0 0 0 1px #1a73e8}',
 		'.geAgentSend{width:34px;height:34px;flex:none;border:0;border-radius:4px;background:#188038;color:#fff;font-size:18px;cursor:pointer;padding:0}',
@@ -283,19 +295,140 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 	agentMessages.appendChild(agentEmptyState);
 	agentView.appendChild(agentMessages);
 	var agentComposer = createElement('div', 'geAgentComposer');
+	var agentAttachments = createElement('div', 'geAgentAttachments geAgentHidden');
+	agentAttachments.setAttribute('aria-label', '待发送图片');
+	var agentImageError = createElement('div', 'geAgentImageError geAgentHidden');
+	agentImageError.setAttribute('role', 'status');
+	var agentImagePicker = createElement('input', 'geAgentHidden');
+	agentImagePicker.type = 'file';
+	agentImagePicker.accept = 'image/png,image/jpeg,image/webp,image/gif';
+	agentImagePicker.multiple = true;
+	agentImagePicker.setAttribute('aria-label', '选择图片');
+	var agentAttachButton = createButton('geAgentIconBtn geAgentAttach', '＋', '添加图片（也可直接粘贴）');
 	var agentComposerRow = createElement('div', 'geAgentComposerRow');
 	var agentInput = createElement('textarea', 'geAgentInput');
 	agentInput.setAttribute('placeholder', '向 Agent 提交修改要求');
 	agentInput.setAttribute('rows', '3');
 	var agentSendButton = createButton('geAgentSend', '↑', '发送');
+	agentComposerRow.appendChild(agentAttachButton);
 	agentComposerRow.appendChild(agentInput);
 	agentComposerRow.appendChild(agentSendButton);
 	var agentComposerStatus = createElement('div', 'geAgentComposerStatus', '正在读取 Agent 状态…');
+	agentComposer.appendChild(agentImagePicker);
+	agentComposer.appendChild(agentAttachments);
+	agentComposer.appendChild(agentImageError);
 	agentComposer.appendChild(agentComposerRow);
 	agentComposer.appendChild(agentComposerStatus);
 	agentView.appendChild(agentComposer);
 	document.body.appendChild(agentView);
 	document.body.appendChild(agentLauncher);
+
+	function showAgentImageError(text)
+	{
+		agentImageError.textContent = text || '';
+		agentImageError.classList.toggle('geAgentHidden', !text);
+	}
+
+	function renderAgentAttachments()
+	{
+		agentAttachments.textContent = '';
+		agentAttachments.classList.toggle('geAgentHidden', agentImages.length === 0);
+		agentImages.forEach(function(image)
+		{
+			var item = createElement('div', 'geAgentAttachment');
+			var preview = createElement('img');
+			preview.src = 'data:' + image.mimeType + ';base64,' + image.data;
+			preview.alt = image.name;
+			var name = createElement('span', 'geAgentAttachmentName', image.name);
+			name.title = image.name;
+			var remove = createButton('geAgentAttachmentRemove', '×', '移除 ' + image.name);
+			remove.addEventListener('click', function()
+			{
+				agentImages = agentImages.filter(function(value) { return value !== image; });
+				showAgentImageError('');
+				renderAgentAttachments();
+			});
+			item.appendChild(preview);
+			item.appendChild(name);
+			item.appendChild(remove);
+			agentAttachments.appendChild(item);
+		});
+	}
+
+	async function addAgentImages(files)
+	{
+		if (agentInput.disabled || agentStopping || agentDisposed) return;
+		var generation = agentImageGeneration;
+		agentImageLoading++;
+		updateAgentControls();
+		showAgentImageError('');
+		try
+		{
+			for (var i = 0; i < files.length; i++)
+			{
+				if (generation !== agentImageGeneration || agentDisposed) break;
+				var file = files[i];
+				if (!/^image\/(png|jpeg|webp|gif)$/.test(file.type))
+				{
+					showAgentImageError('支持 PNG、JPEG、WebP 和 GIF 图片');
+					continue;
+				}
+				if (file.size === 0 || file.size > maxAgentImageBytes)
+				{
+					showAgentImageError('每张图片需大于 0 且不超过 5 MB');
+					continue;
+				}
+				if (agentImages.length >= maxAgentImages)
+				{
+					showAgentImageError('每条消息最多添加 4 张图片');
+					break;
+				}
+				var dataUrl = await new Promise(function(resolve, reject)
+				{
+					var reader = new FileReader();
+					reader.onload = function() { resolve(reader.result); };
+					reader.onerror = function() { reject(new Error('图片读取失败，请重试')); };
+					reader.readAsDataURL(file);
+				});
+				// Reject corrupt files before showing a broken preview.
+				await new Promise(function(resolve, reject)
+				{
+					var preview = new Image();
+					preview.onload = resolve;
+					preview.onerror = function() { reject(new Error('图片无法读取，请选择有效图片')); };
+					preview.src = dataUrl;
+				});
+				if (generation !== agentImageGeneration || agentDisposed) break;
+				if (agentImages.length >= maxAgentImages)
+				{
+					showAgentImageError('每条消息最多添加 4 张图片');
+					break;
+				}
+				agentImages.push({name: file.name || '剪贴板图片.png', mimeType: file.type,
+					data: dataUrl.slice(dataUrl.indexOf(',') + 1)});
+				renderAgentAttachments();
+			}
+		}
+		catch (error)
+		{
+			if (generation === agentImageGeneration && !agentDisposed) showAgentImageError(error.message);
+		}
+		finally
+		{
+			agentImageLoading--;
+			if (!agentDisposed) updateAgentControls();
+		}
+	}
+
+	function restoreAgentDraft(text, images)
+	{
+		if (!agentDisposed && !agentInput.value && agentImages.length === 0 && !agentImageLoading)
+		{
+			agentInput.value = text;
+			agentImages = images;
+			renderAgentAttachments();
+		}
+	}
 
 	function advanceAgentQuote()
 	{
@@ -808,17 +941,19 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 	function updateAgentControls()
 	{
 		agentLauncher.classList.toggle('geAgentWorking', agentBusy);
-		agentComposerStatus.textContent = agentStatusText();
-		agentSendButton.disabled = agentLoading || agentStopping ||
+		agentComposerStatus.textContent = agentImageLoading > 0 ? '正在读取图片…' : agentStatusText();
+		agentAttachments.setAttribute('aria-busy', agentImageLoading > 0 ? 'true' : 'false');
+		agentSendButton.disabled = agentLoading || agentStopping || (!agentBusy && agentImageLoading > 0) ||
 			(agentState != null && agentState.configured === false);
 		agentInput.disabled = agentLoading ||
 			(agentState != null && agentState.configured === false);
+		agentAttachButton.disabled = agentInput.disabled || agentStopping;
 		agentSendButton.textContent = agentBusy ? '■' : '↑';
 		agentSendButton.title = agentStopping ? '正在停止任务…' : (agentBusy ? '停止任务' : '发送');
 		agentSendButton.setAttribute('aria-label', agentSendButton.title);
 		agentSendButton.classList.toggle('geAgentSendStop', agentBusy);
 		agentInput.setAttribute('placeholder', agentBusy ? '补充要求后按 Enter 发送' :
-			(agentState != null && agentState.sessionId ? '继续当前对话' : '向 Agent 提交修改要求'));
+			(agentState != null && agentState.sessionId ? '继续对话，可粘贴图片' : '描述修改要求，或粘贴图片'));
 		agentNewThreadButton.disabled = agentBusy || agentLoading;
 		agentProfileButton.disabled = agentBusy || agentLoading;
 		agentRollbackButton.disabled = agentBusy || agentLoading ||
@@ -1071,6 +1206,13 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 		var metaParts = [];
 
 		if (message.steered === true) metaParts.push('补充要求');
+		if (Array.isArray(message.images) && message.images.length)
+		{
+			metaParts.push('图片 ' + message.images.length + ' 张：' + message.images.map(function(image)
+			{
+				return image.name || '图片';
+			}).join('、'));
+		}
 		if (message.filePath) metaParts.push(message.filePath);
 		if (message.status === 'rolled-back') metaParts.push('已撤回');
 
@@ -1427,17 +1569,20 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 		});
 	}
 
-	async function sendAgentSteer(text)
+	async function sendAgentSteer(text, images)
 	{
 		agentInput.value = '';
-		addAgentMessage({role: 'user', text: text, steered: true});
+		agentImages = [];
+		renderAgentAttachments();
+		addAgentMessage({role: 'user', text: text, images: images, steered: true});
 
 		try
 		{
-			await request('workspaceAgentSteer', {text: text});
+			await request('workspaceAgentSteer', {text: text, images: images});
 		}
 		catch (error)
 		{
+			restoreAgentDraft(text, images);
 			addAgentMessage({role: 'assistant', text: error.message}, true);
 		}
 		finally
@@ -1453,11 +1598,15 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 	async function sendAgentPrompt()
 	{
 		var prompt = agentInput.value.trim();
-		if (prompt === '' || agentLoading || agentStopping) return;
+		var images = agentImages.slice();
+		if ((prompt === '' && images.length === 0) || agentLoading || agentStopping || agentImageLoading ||
+			agentInput.disabled) return;
+		if (prompt === '') prompt = '请根据附图帮助我绘制或修改当前图纸。';
+		showAgentImageError('');
 
 		if (agentBusy)
 		{
-			sendAgentSteer(prompt);
+			sendAgentSteer(prompt, images);
 			return;
 		}
 
@@ -1475,7 +1624,9 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 		}
 
 		agentInput.value = '';
-		addAgentMessage({role: 'user', text: prompt});
+		agentImages = [];
+		renderAgentAttachments();
+		addAgentMessage({role: 'user', text: prompt, images: images});
 		beginAgentRun('正在保存当前图纸');
 		setAgentBusy(true);
 		var prepared = null;
@@ -1485,6 +1636,7 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 			prepared = await saveCurrentFileForAgent(true);
 			if (agentStopping)
 			{
+				restoreAgentDraft(prompt, images);
 				await restoreCurrentFileAfterAgent(prepared.path, false);
 				prepared = null;
 				setAgentBusy(false);
@@ -1494,6 +1646,7 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 			}
 			await request('workspaceAgentChat', {input: {
 				prompt: prompt,
+				images: images,
 				filePath: prepared.path,
 				context: context
 			}}, updateAgentProgress);
@@ -1504,6 +1657,7 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 		}
 		catch (error)
 		{
+			if (error.code !== 'WORKSPACE_AGENT_INTERRUPTED') restoreAgentDraft(prompt, images);
 			if (prepared != null) await restoreCurrentFileAfterAgent(prepared.path, true);
 			setAgentBusy(false);
 			await loadAgentState(true);
@@ -1529,6 +1683,11 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 			request('workspaceAgentNewThread').then(function(next)
 			{
 				agentState = Object.assign({}, agentState || {}, next, {configured: true, busy: false});
+				agentImageGeneration++;
+				agentImages = [];
+				agentInput.value = '';
+				renderAgentAttachments();
+				showAgentImageError('');
 				renderAgentHistory([]);
 			}).catch(function(error)
 			{
@@ -1638,10 +1797,28 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 		agentExpandButton.setAttribute('aria-label', agentExpandButton.title);
 	});
 	// Keep assistant input and text selection independent of canvas shortcuts.
-	['mousedown', 'pointerdown', 'keydown', 'keyup', 'contextmenu'].forEach(function(type)
+	['mousedown', 'pointerdown', 'keydown', 'keyup', 'contextmenu', 'paste'].forEach(function(type)
 	{
 		agentView.addEventListener(type, function(event) { event.stopPropagation(); });
 		agentLauncher.addEventListener(type, function(event) { event.stopPropagation(); });
+	});
+	agentAttachButton.addEventListener('click', function() { agentImagePicker.click(); });
+	agentImagePicker.addEventListener('change', function()
+	{
+		var files = Array.from(agentImagePicker.files || []);
+		agentImagePicker.value = '';
+		addAgentImages(files);
+	});
+	agentInput.addEventListener('paste', function(event)
+	{
+		var files = Array.from(event.clipboardData != null ? event.clipboardData.items : []).
+			filter(function(item) { return item.kind === 'file' && item.type.indexOf('image/') === 0; }).
+			map(function(item) { return item.getAsFile(); }).filter(Boolean);
+		if (files.length > 0)
+		{
+			event.preventDefault();
+			addAgentImages(files);
+		}
 	});
 	agentPageScopeSelect.addEventListener('change', handlePageScopeChange);
 	agentSendButton.addEventListener('click', handleAgentSendClick);
@@ -1687,6 +1864,8 @@ Draw.loadPlugin(function installWorkspaceAgent(ui)
 	ui.destroyFunctions.push(function()
 	{
 		agentDisposed = true;
+		agentImageGeneration++;
+		agentImages = [];
 		if (quoteTimer != null) window.clearInterval(quoteTimer);
 		document.removeEventListener('visibilitychange', updateAgentCompanion);
 		reducedMotion.removeEventListener('change', updateAgentCompanion);

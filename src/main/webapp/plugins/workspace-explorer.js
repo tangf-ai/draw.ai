@@ -24,6 +24,7 @@ Draw.loadPlugin(function(ui)
 	var draggedRelativePath = null;
 	var graphModelListener = null;
 	var removeWorkspaceChangedListener = null;
+	var removeWorkspaceMovedListener = null;
 	var operationInProgress = false;
 	var fileMenu = null;
 	var fileMenuTrigger = null;
@@ -203,6 +204,42 @@ Draw.loadPlugin(function(ui)
 	{
 		return state != null && normalizedPath(state.root + '/' + item.relativePath) ===
 			normalizedPath(currentFilePath());
+	}
+
+	function handleMovedDirectory(move)
+	{
+		if (state == null || move.root !== state.root) return Promise.resolve();
+		if (currentDirectory === move.oldRelativePath || currentDirectory.indexOf(move.oldRelativePath + '/') === 0)
+			currentDirectory = move.movedRelativePath + currentDirectory.substring(move.oldRelativePath.length);
+		var file = ui.getCurrentFile();
+		var oldPath = currentFilePath().replace(/\\/g, '/');
+		var prefix = String(move.oldAbsolutePath).replace(/\\/g, '/');
+		if (file == null || normalizedPath(oldPath).indexOf(normalizedPath(prefix) + '/') !== 0)
+			return Promise.resolve();
+		var nextPath = move.absolutePath + oldPath.substring(prefix.length);
+		var relativePath = move.movedRelativePath + oldPath.substring(prefix.length);
+		var graph = ui.editor.graph;
+		var enabled = graph.isEnabled();
+		graph.stopEditing(false);
+		graph.setEnabled(false);
+		// Update the existing file before any old-path watcher notification arrives.
+		// Keep the graph, unsaved labels and undo manager in place.
+		file.fileObject.path = nextPath;
+		if (file.fileObject.draftFileName && file.fileObject.draftFileName.indexOf(move.oldAbsolutePath + '/') === 0)
+			file.fileObject.draftFileName = move.absolutePath + file.fileObject.draftFileName.substring(move.oldAbsolutePath.length);
+		file.addToRecent?.();
+		file.descriptorChanged();
+		return api.resolveItem(relativePath, move.root).then(function(result)
+		{
+			if (ui.getCurrentFile() === file) file.fileObject.path = result.absolutePath;
+		}).finally(function()
+		{
+			if (ui.getCurrentFile() === file)
+			{
+				graph.setEnabled(enabled);
+				ui.watchFile?.(file);
+			}
+		});
 	}
 
 	function matchesSearch(item)
@@ -912,6 +949,13 @@ Draw.loadPlugin(function(ui)
 	graphModelListener = function() { render(); };
 	ui.editor.graph.getModel().addListener(mxEvent.CHANGE, graphModelListener);
 	removeWorkspaceChangedListener = api.onChanged(loadState);
+	if (typeof api.onMoved === 'function')
+	{
+		removeWorkspaceMovedListener = api.onMoved(function(move)
+		{
+			handleMovedDirectory(move).then(loadState).catch(showError);
+		});
+	}
 
 	var initialMode = 'workspace';
 	try { initialMode = localStorage.getItem('.drawAiLeftPanelMode') || 'workspace'; } catch (error) {}
@@ -933,6 +977,7 @@ Draw.loadPlugin(function(ui)
 		{
 			removeWorkspaceChangedListener();
 		}
+		if (typeof removeWorkspaceMovedListener === 'function') removeWorkspaceMovedListener();
 
 		delete ui.__drawAiWorkspaceExplorerInstalled;
 		if (css.parentNode != null) css.parentNode.removeChild(css);
