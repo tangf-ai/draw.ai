@@ -22,6 +22,7 @@ Draw.loadPlugin(function(ui)
 	var destroyed = false;
 	var expanded = {};
 	var draggedRelativePath = null;
+	var pointerDrag = null;
 	var graphModelListener = null;
 	var removeWorkspaceChangedListener = null;
 	var removeWorkspaceMovedListener = null;
@@ -310,6 +311,12 @@ Draw.loadPlugin(function(ui)
 			normalizedPath(parentPath(draggedRelativePath)) !== normalizedPath(destinationRelativePath);
 	}
 
+	function hasExternalFiles(event)
+	{
+		return draggedRelativePath == null &&
+			Array.from(event.dataTransfer?.types || []).indexOf('Files') >= 0;
+	}
+
 	function clearDropTargets()
 	{
 		var targets = workspaceView.querySelectorAll('.geWorkspaceDropTarget');
@@ -331,12 +338,116 @@ Draw.loadPlugin(function(ui)
 		}
 	}
 
+	function pointerDropTarget(event)
+	{
+		var hit = document.elementFromPoint(event.clientX, event.clientY);
+		var row = hit?.closest('.geWorkspaceRow');
+
+		if (row != null && workspaceView.contains(row))
+		{
+			return row.dataset.workspaceType === 'directory' ?
+				{target: row, destination: row.dataset.workspacePath} : null;
+		}
+
+		if (hit != null && identity.contains(hit)) return {target: identity, destination: ''};
+		if (hit === tree) return {target: tree, destination: ''};
+		return null;
+	}
+
+	function updatePointerDropTarget(event)
+	{
+		var next = pointerDropTarget(event);
+		pointerDrag.destination = null;
+		clearDropTargets();
+
+		if (next == null || !canDropIn(next.destination)) return;
+
+		pointerDrag.destination = next.destination;
+		next.target.classList.add('geWorkspaceDropTarget');
+	}
+
+	function stopPointerDrag()
+	{
+		window.removeEventListener('pointermove', movePointerDrag);
+		window.removeEventListener('pointerup', finishPointerDrag);
+		window.removeEventListener('pointercancel', cancelPointerDrag);
+		window.removeEventListener('blur', cancelPointerDrag);
+	}
+
+	function cancelPointerDrag()
+	{
+		if (pointerDrag == null) return;
+		stopPointerDrag();
+		pointerDrag = null;
+		draggedRelativePath = null;
+		clearDragFeedback();
+	}
+
+	function movePointerDrag(event)
+	{
+		if (pointerDrag == null || event.pointerId !== pointerDrag.pointerId) return;
+		var distance = Math.max(Math.abs(event.clientX - pointerDrag.startX),
+			Math.abs(event.clientY - pointerDrag.startY));
+
+		if (!pointerDrag.active && distance < 6) return;
+		if (!pointerDrag.active)
+		{
+			pointerDrag.active = true;
+			draggedRelativePath = pointerDrag.item.relativePath;
+			pointerDrag.row.classList.add('geWorkspaceDragging');
+		}
+
+		event.preventDefault();
+		updatePointerDropTarget(event);
+	}
+
+	function finishPointerDrag(event)
+	{
+		if (pointerDrag == null || event.pointerId !== pointerDrag.pointerId) return;
+		var drag = pointerDrag;
+		stopPointerDrag();
+		pointerDrag = null;
+
+		if (!drag.active)
+		{
+			draggedRelativePath = null;
+			clearDragFeedback();
+			openDiagram(drag.item.relativePath);
+			return;
+		}
+
+		event.preventDefault();
+		draggedRelativePath = null;
+		clearDragFeedback();
+		if (drag.destination != null) moveDiagram(drag.item.relativePath, drag.destination);
+	}
+
+	function startPointerDrag(event, item, row)
+	{
+		if (event.button !== 0 || operationInProgress || event.target.closest('.geWorkspaceMore')) return;
+		event.preventDefault();
+		cancelPointerDrag();
+		pointerDrag = {
+			item: item,
+			row: row,
+			pointerId: event.pointerId,
+			startX: event.clientX,
+			startY: event.clientY,
+			active: false,
+			destination: null
+		};
+		window.addEventListener('pointermove', movePointerDrag);
+		window.addEventListener('pointerup', finishPointerDrag);
+		window.addEventListener('pointercancel', cancelPointerDrag);
+		window.addEventListener('blur', cancelPointerDrag);
+	}
+
 	function setDropTarget(event, destinationRelativePath, target)
 	{
-		if (draggedRelativePath == null) return false;
+		if (draggedRelativePath == null && !hasExternalFiles(event)) return false;
 		event.stopPropagation();
 
-		if (!canDropIn(destinationRelativePath))
+		if (!canDropIn(destinationRelativePath) && !hasExternalFiles(event))
 		{
 			event.dataTransfer.dropEffect = 'none';
 			clearDropTargets();
@@ -606,6 +717,20 @@ Draw.loadPlugin(function(ui)
 	function dropFile(event, destinationRelativePath, target)
 	{
 		if (!setDropTarget(event, destinationRelativePath, target)) return;
+		if (draggedRelativePath == null)
+		{
+			clearDragFeedback();
+			api.importFiles(destinationRelativePath, event.dataTransfer.files).then(function(result)
+			{
+				if (result?.state)
+				{
+					state = result.state;
+					render();
+				}
+			}).catch(showError);
+			return;
+		}
+
 		var relativePath = draggedRelativePath;
 		draggedRelativePath = null;
 		clearDragFeedback();
@@ -620,6 +745,7 @@ Draw.loadPlugin(function(ui)
 		row.style.paddingLeft = (7 + depth * 13) + 'px';
 		row.title = item.relativePath;
 		row.setAttribute('data-workspace-path', item.relativePath);
+		row.dataset.workspaceType = item.type;
 
 		if (item.type === 'directory')
 		{
@@ -642,6 +768,10 @@ Draw.loadPlugin(function(ui)
 			{
 				setDropTarget(event, item.relativePath, row);
 			});
+			row.addEventListener('dragenter', function(event)
+			{
+				setDropTarget(event, item.relativePath, row);
+			});
 			row.addEventListener('dragleave', function(event)
 			{
 				clearDropTarget(event, row);
@@ -657,6 +787,10 @@ Draw.loadPlugin(function(ui)
 			row.appendChild(icon('file'));
 			if (isCurrentFile(item)) row.classList.add('geWorkspaceCurrent');
 			row.addEventListener('click', function() { openDiagram(item.relativePath); });
+			row.addEventListener('pointerdown', function(event)
+			{
+				startPointerDrag(event, item, row);
+			});
 			row.draggable = true;
 			row.addEventListener('dragstart', function(event)
 			{
@@ -914,6 +1048,10 @@ Draw.loadPlugin(function(ui)
 	{
 		setDropTarget(event, '', identity);
 	});
+	identity.addEventListener('dragenter', function(event)
+	{
+		setDropTarget(event, '', identity);
+	});
 	identity.addEventListener('dragleave', function(event)
 	{
 		clearDropTarget(event, identity);
@@ -933,6 +1071,11 @@ Draw.loadPlugin(function(ui)
 		render();
 	});
 	tree.addEventListener('dragover', function(event)
+	{
+		if (event.target !== tree) return;
+		setDropTarget(event, '', tree);
+	});
+	tree.addEventListener('dragenter', function(event)
 	{
 		if (event.target !== tree) return;
 		setDropTarget(event, '', tree);
@@ -978,6 +1121,7 @@ Draw.loadPlugin(function(ui)
 			removeWorkspaceChangedListener();
 		}
 		if (typeof removeWorkspaceMovedListener === 'function') removeWorkspaceMovedListener();
+		cancelPointerDrag();
 
 		delete ui.__drawAiWorkspaceExplorerInstalled;
 		if (css.parentNode != null) css.parentNode.removeChild(css);
