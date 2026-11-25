@@ -351,24 +351,29 @@ export function createWorkspaceController(dependencies)
 		return true;
 	});
 
-	handle('workspace:import-files', async (event, parentRelativePath) =>
+	handle('workspace:import-files', async (event, parentRelativePath, sourcePaths) =>
 	{
-		const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender), {
-			title: '导入图文件',
-			properties: ['openFile', 'multiSelections'],
-			filters: [{
-				name: '图文件',
-				extensions: [...WORKSPACE_FILE_EXTENSIONS].map(extension => extension.slice(1))
-			}]
-		});
-
-		if (result.canceled || result.filePaths.length === 0)
+		if (sourcePaths == null)
 		{
-			return null;
+			const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender), {
+				title: '导入图文件',
+				properties: ['openFile', 'multiSelections'],
+				filters: [{
+					name: '图文件',
+					extensions: [...WORKSPACE_FILE_EXTENSIONS].map(extension => extension.slice(1))
+				}]
+			});
+
+			if (result.canceled || result.filePaths.length === 0)
+			{
+				return null;
+			}
+
+			sourcePaths = result.filePaths;
 		}
 
 		const root = store?.get(WORKSPACE_ROOT_KEY);
-		const importedRelativePaths = await importWorkspaceFiles(root, parentRelativePath, result.filePaths);
+		const importedRelativePaths = await importWorkspaceFiles(root, parentRelativePath, sourcePaths);
 		return {state: await getState(), importedRelativePaths: importedRelativePaths};
 	});
 

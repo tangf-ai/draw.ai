@@ -35,6 +35,8 @@ describe('editor workspace explorer', () =>
 		const plugin = await source('drawio/src/main/webapp/plugins/workspace-explorer.js');
 
 		assert.match(plugin, /row\.draggable = true/);
+		assert.match(plugin, /row\.addEventListener\('pointerdown'/);
+		assert.match(plugin, /startPointerDrag\(event, item, row\)/);
 		assert.match(plugin, /application\/x-draw-ai-workspace-file/);
 		assert.match(plugin, /dropFile\(event, item\.relativePath, row\)/);
 		assert.match(plugin, /dropFile\(event, '', identity\)/);
@@ -71,6 +73,21 @@ describe('editor workspace explorer', () =>
 		assert.match(manager,
 			/else if \(node\.type === 'directory'\)[\s\S]*row\.addEventListener\('drop'/);
 		assert.match(manager, /elements\.fileList\.querySelectorAll\('\.is-drop-target'\)/);
+	});
+
+	test('accepts external files dropped onto workspace directories', async () =>
+	{
+		const preload = await source('src/workspace/preload.js');
+		const editorPreload = await source('src/main/electron-preload.js');
+		const manager = await source('src/workspace/workspace.js');
+		const plugin = await source('drawio/src/main/webapp/plugins/workspace-explorer.js');
+
+		assert.match(preload, /webUtils\.getPathForFile\(file\)/);
+		assert.match(editorPreload, /webUtils\.getPathForFile\(file\)/);
+		assert.match(manager, /hasExternalFiles\(event\)/);
+		assert.match(manager, /api\.importFiles\(destinationRelativePath, event\.dataTransfer\.files\)/);
+		assert.match(plugin, /hasExternalFiles\(event\)/);
+		assert.match(plugin, /api\.importFiles\(destinationRelativePath, event\.dataTransfer\.files\)/);
 	});
 
 	test('pressing Enter in the name dialog submits the save button', async () =>

@@ -1,4 +1,19 @@
-const {contextBridge, ipcRenderer} = require('electron');
+const {contextBridge, ipcRenderer, webUtils} = require('electron');
+
+function getDroppedFilePaths(files)
+{
+	return Array.from(files || []).map(file =>
+	{
+		try
+		{
+			return webUtils.getPathForFile(file);
+		}
+		catch (error)
+		{
+			return null;
+		}
+	}).filter(Boolean);
+}
 
 async function invoke(channel, ...args)
 {
@@ -28,7 +43,8 @@ contextBridge.exposeInMainWorld('workspaceAPI', {
 	trashItem: (relativePath) => invoke('workspace:trash-item', relativePath),
 	openItem: (relativePath) => invoke('workspace:open-item', relativePath),
 	revealItem: (relativePath) => invoke('workspace:reveal-item', relativePath),
-	importFiles: (parentRelativePath) => invoke('workspace:import-files', parentRelativePath),
+	importFiles: (parentRelativePath, files) =>
+		invoke('workspace:import-files', parentRelativePath, files == null ? null : getDroppedFilePaths(files)),
 	editTemplate: () => invoke('workspace:edit-template'),
 	importTemplate: () => invoke('workspace:import-template'),
 	updateTemplate: (force = false) => invoke('workspace:update-template', force === true),

@@ -1,7 +1,23 @@
 const {
     contextBridge,
-    ipcRenderer
+    ipcRenderer,
+    webUtils
 } = require("electron");
+
+function getDroppedFilePaths(files)
+{
+	return Array.from(files || []).map(file =>
+	{
+		try
+		{
+			return webUtils.getPathForFile(file);
+		}
+		catch (error)
+		{
+			return null;
+		}
+	}).filter(Boolean);
+}
 
 // One-shot migration: when the main process determines this is the first
 // launch with the new defaultAdaptiveColors behaviour, it passes the chosen
@@ -153,6 +169,8 @@ contextBridge.exposeInMainWorld('workspaceAPI', {
 		invokeWorkspace('workspace:copy-file', relativePath, destinationRelativePath, expectedRoot),
 	trashFile: (relativePath, expectedRoot) => invokeWorkspace('workspace:trash-file', relativePath, expectedRoot),
 	resolveItem: (relativePath, expectedRoot) => invokeWorkspace('workspace:resolve-item', relativePath, expectedRoot),
+	importFiles: (parentRelativePath, files) =>
+		invokeWorkspace('workspace:import-files', parentRelativePath, files == null ? null : getDroppedFilePaths(files)),
 	showManager: () => invokeWorkspace('workspace:show-manager'),
 	onMoved: callback =>
 	{

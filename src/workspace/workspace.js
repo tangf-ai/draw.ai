@@ -414,6 +414,11 @@ function canDropFile(destinationRelativePath)
 	return item != null && canMoveTo(item, destinationRelativePath);
 }
 
+function hasExternalFiles(event)
+{
+	return draggedRelativePath == null && Array.from(event.dataTransfer?.types || []).includes('Files');
+}
+
 function canMoveTo(item, destinationRelativePath)
 {
 	return parentDirectory(item.relativePath) !== destinationRelativePath &&
@@ -454,7 +459,7 @@ function addDragSource(target, item)
 function setDropTarget(event, destinationRelativePath, target)
 {
 	if (draggedRelativePath != null) event.stopPropagation();
-	if (!canDropFile(destinationRelativePath))
+	if (!canDropFile(destinationRelativePath) && !hasExternalFiles(event))
 	{
 		event.dataTransfer.dropEffect = 'none';
 		clearDragFeedback();
@@ -474,6 +479,19 @@ async function dropFile(event, destinationRelativePath, target)
 	if (!setDropTarget(event, destinationRelativePath, target)) return;
 
 	const relativePath = draggedRelativePath;
+	if (relativePath == null)
+	{
+		draggedRelativePath = null;
+		clearDragFeedback();
+		const result = await runAction(() => api.importFiles(destinationRelativePath, event.dataTransfer.files), '文件已导入');
+		if (result?.state)
+		{
+			workspaceState = result.state;
+			render();
+		}
+		return;
+	}
+
 	const item = findNode(relativePath);
 	draggedRelativePath = null;
 	clearDragFeedback();
@@ -571,6 +589,10 @@ function createTreeRow(node, depth)
 	{
 		setDropTarget(event, node.relativePath, button);
 	});
+	button.addEventListener('dragenter', (event) =>
+	{
+		setDropTarget(event, node.relativePath, button);
+	});
 	button.addEventListener('dragleave', (event) =>
 	{
 		if (event.relatedTarget == null || !button.contains(event.relatedTarget))
@@ -653,6 +675,10 @@ function createFileRow(node)
 	{
 		row.title = '可拖动此目录，也可拖入图纸或目录';
 		row.addEventListener('dragover', (event) =>
+		{
+			setDropTarget(event, node.relativePath, row);
+		});
+		row.addEventListener('dragenter', (event) =>
 		{
 			setDropTarget(event, node.relativePath, row);
 		});
